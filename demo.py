@@ -61,7 +61,7 @@ def parse_args():
                       nargs=argparse.REMAINDER)
   parser.add_argument('--load_dir', dest='load_dir',
                       help='directory to load models',
-                      default="/srv/share/jyang375/models")
+                      default="/sequoia/data1/gcheron/code/pytorch/faster-rcnn.pytorch/data/")
   parser.add_argument('--image_dir', dest='image_dir',
                       help='directory to load images for demo',
                       default="images")
@@ -145,6 +145,18 @@ if __name__ == '__main__':
   if args.set_cfgs is not None:
     cfg_from_list(args.set_cfgs)
 
+  if args.dataset == 'coco':
+    _classes = np.asarray(['__background__', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'])
+    cfg_from_list(['ANCHOR_SCALES', '[4, 8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '50'])
+
+  else:
+    _classes = np.asarray(['__background__',
+                         'aeroplane', 'bicycle', 'bird', 'boat',
+                         'bottle', 'bus', 'car', 'cat', 'chair',
+                         'cow', 'diningtable', 'dog', 'horse',
+                         'motorbike', 'person', 'pottedplant',
+                         'sheep', 'sofa', 'train', 'tvmonitor'])
+
   print('Using config:')
   pprint.pprint(cfg)
   np.random.seed(cfg.RNG_SEED)
@@ -158,22 +170,15 @@ if __name__ == '__main__':
   load_name = os.path.join(input_dir,
     'faster_rcnn_{}_{}_{}.pth'.format(args.checksession, args.checkepoch, args.checkpoint))
 
-  pascal_classes = np.asarray(['__background__',
-                       'aeroplane', 'bicycle', 'bird', 'boat',
-                       'bottle', 'bus', 'car', 'cat', 'chair',
-                       'cow', 'diningtable', 'dog', 'horse',
-                       'motorbike', 'person', 'pottedplant',
-                       'sheep', 'sofa', 'train', 'tvmonitor'])
-
   # initilize the network here.
   if args.net == 'vgg16':
-    fasterRCNN = vgg16(pascal_classes, pretrained=False, class_agnostic=args.class_agnostic)
+    fasterRCNN = vgg16(_classes, pretrained=False, class_agnostic=args.class_agnostic)
   elif args.net == 'res101':
-    fasterRCNN = resnet(pascal_classes, 101, pretrained=False, class_agnostic=args.class_agnostic)
+    fasterRCNN = resnet(_classes, 101, pretrained=False, class_agnostic=args.class_agnostic)
   elif args.net == 'res50':
-    fasterRCNN = resnet(pascal_classes, 50, pretrained=False, class_agnostic=args.class_agnostic)
+    fasterRCNN = resnet(_classes, 50, pretrained=False, class_agnostic=args.class_agnostic)
   elif args.net == 'res152':
-    fasterRCNN = resnet(pascal_classes, 152, pretrained=False, class_agnostic=args.class_agnostic)
+    fasterRCNN = resnet(_classes, 152, pretrained=False, class_agnostic=args.class_agnostic)
   else:
     print("network is not defined")
     pdb.set_trace()
@@ -280,7 +285,7 @@ if __name__ == '__main__':
             else:
                 box_deltas = box_deltas.view(-1, 4) * torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_STDS).cuda() \
                            + torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS).cuda()
-                box_deltas = box_deltas.view(1, -1, 4 * len(pascal_classes))
+                box_deltas = box_deltas.view(1, -1, 4 * len(_classes))
 
           pred_boxes = bbox_transform_inv(boxes, box_deltas, 1)
           pred_boxes = clip_boxes(pred_boxes, im_info.data, 1)
@@ -297,7 +302,7 @@ if __name__ == '__main__':
       misc_tic = time.time()
       if vis:
           im2show = np.copy(im)
-      for j in xrange(1, len(pascal_classes)):
+      for j in xrange(1, len(_classes)):
           inds = torch.nonzero(scores[:,j]>thresh).view(-1)
           # if there is det
           if inds.numel() > 0:
@@ -313,7 +318,7 @@ if __name__ == '__main__':
             keep = nms(cls_dets, cfg.TEST.NMS)
             cls_dets = cls_dets[keep.view(-1).long()]
             if vis:
-              im2show = vis_detections(im2show, pascal_classes[j], cls_dets.cpu().numpy(), 0.5)
+              im2show = vis_detections(im2show, _classes[j], cls_dets.cpu().numpy(), 0.5)
 
       misc_toc = time.time()
       nms_time = misc_toc - misc_tic

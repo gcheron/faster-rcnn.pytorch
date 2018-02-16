@@ -58,7 +58,8 @@ def parse_args():
                       default=10000, type=int)
 
   parser.add_argument('--save_dir', dest='save_dir',
-                      help='directory to save models', default="/srv/share/jyang375/models",
+                      help='directory to save models',
+                      default="/sequoia/data2/gcheron/pytorch/faster-rcnn.pytorch/models",
                       nargs=argparse.REMAINDER)
   parser.add_argument('--nw', dest='num_workers',
                       help='number of worker to load data',
@@ -179,6 +180,10 @@ if __name__ == '__main__':
       args.imdb_name = "vg_150-50-50_minitrain"
       args.imdbval_name = "vg_150-50-50_minival"
       args.set_cfgs = ['ANCHOR_SCALES', '[4, 8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '50']
+  elif args.dataset == "ucf101":
+      args.imdb_name = "ucf101_train"
+      args.imdbval_name = "ucf101_val"
+      args.set_cfgs = ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
 
   args.cfg_file = "cfgs/{}_ls.yml".format(args.net) if args.large_scale else "cfgs/{}.yml".format(args.net)
 

@@ -9,6 +9,7 @@ from model.utils.config import cfg
 from datasets.factory import get_imdb
 import PIL
 import pdb
+import ipdb
 
 def prepare_roidb(imdb):
   """Enrich the imdb's roidb by adding some derived quantities that
@@ -19,14 +20,16 @@ def prepare_roidb(imdb):
   """
 
   roidb = imdb.roidb
-  if not (imdb.name.startswith('coco')):
+  #if not (imdb.name.startswith('coco')):
+  if not 'height' in roidb[0]:
     sizes = [PIL.Image.open(imdb.image_path_at(i)).size
          for i in range(imdb.num_images)]
          
   for i in range(len(imdb.image_index)):
     roidb[i]['img_id'] = imdb.image_id_at(i)
     roidb[i]['image'] = imdb.image_path_at(i)
-    if not (imdb.name.startswith('coco')):
+    #if not (imdb.name.startswith('coco')):
+    if not 'height' in roidb[i]:
       roidb[i]['width'] = sizes[i][0]
       roidb[i]['height'] = sizes[i][1]
     # need gt_overlaps as a dense array for argmax

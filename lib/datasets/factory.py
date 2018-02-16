@@ -15,6 +15,7 @@ from datasets.pascal_voc import pascal_voc
 from datasets.coco import coco
 from datasets.imagenet import imagenet
 from datasets.vg import vg
+from datasets.ucf101 import ucf101
 
 import numpy as np
 
@@ -52,6 +53,12 @@ for version in ['150-50-20', '150-50-50', '500-150-80', '750-250-150', '1750-700
         name = 'vg_{}_{}'.format(version,split)
         __sets[name] = (lambda split=split, version=version: vg(version, split))
         
+# Set up ucf101_<split>
+for split in ['train', 'val']:
+   name = 'ucf101_{}'.format(split)
+   __sets[name] = (lambda split=split: ucf101(split))
+
+
 # set up image net.
 for split in ['train', 'val', 'val1', 'val2', 'test']:
     name = 'imagenet_{}'.format(split)
