@@ -1,0 +1,9 @@
+# DEMO
+py demo.py -- --net res101 --checkepoch 2 --cuda --image_dir /sequoia/data2/gcheron/UCF101/images/v_Skiing_g01_c01/ --dataset ucf101 --load_dir /sequoia/data2/gcheron/pytorch/faster-rcnn.pytorch/models/ --checkpoint 680671
+
+
+# train RGB
+py trainval_net.py -- --dataset ucf101 --net res101 --cuda --feat rgb
+
+# train OPF
+py trainval_net.py -- --dataset ucf101 --net res101 --cuda --feat opf

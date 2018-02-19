@@ -56,6 +56,9 @@ def parse_args():
   parser.add_argument('--checkpoint_interval', dest='checkpoint_interval',
                       help='number of iterations to display',
                       default=10000, type=int)
+  parser.add_argument('--feat', dest='feature',
+                    help='rgb, opf',
+                    default='', type=str)
 
   parser.add_argument('--save_dir', dest='save_dir',
                       help='directory to save models',
@@ -181,8 +184,8 @@ if __name__ == '__main__':
       args.imdbval_name = "vg_150-50-50_minival"
       args.set_cfgs = ['ANCHOR_SCALES', '[4, 8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '50']
   elif args.dataset == "ucf101":
-      args.imdb_name = "ucf101_train"
-      args.imdbval_name = "ucf101_val"
+      args.imdb_name = "ucf101_train_" + args.feature
+      args.imdbval_name = "ucf101_val_" + args.feature
       args.set_cfgs = ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
 
   args.cfg_file = "cfgs/{}_ls.yml".format(args.net) if args.large_scale else "cfgs/{}.yml".format(args.net)

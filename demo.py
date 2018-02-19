@@ -65,6 +65,9 @@ def parse_args():
   parser.add_argument('--image_dir', dest='image_dir',
                       help='directory to load images for demo',
                       default="images")
+  parser.add_argument('--image_resdir', dest='image_resdir',
+                      help='directory to save images for demo',
+                      default="images")
   parser.add_argument('--cuda', dest='cuda',
                       help='whether use CUDA',
                       action='store_true')
@@ -149,6 +152,14 @@ if __name__ == '__main__':
     _classes = np.asarray(['__background__', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'])
     cfg_from_list(['ANCHOR_SCALES', '[4, 8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '50'])
 
+  elif args.dataset == 'ucf101':
+    _classes = np.asarray(['__background__',
+                     'Basketball', 'BasketballDunk', 'Biking', 'CliffDiving', 'CricketBowling',
+                     'Diving', 'Fencing', 'FloorGymnastics', 'GolfSwing', 'HorseRiding', 'IceDancing',
+                     'LongJump', 'PoleVault', 'RopeClimbing', 'SalsaSpin', 'SkateBoarding', 'Skiing',
+                     'Skijet', 'SoccerJuggling', 'Surfing', 'TennisSwing', 'TrampolineJumping',
+                     'VolleyballSpiking', 'WalkingWithDog'])
+    cfg_from_list(['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20'])
   else:
     _classes = np.asarray(['__background__',
                          'aeroplane', 'bicycle', 'bird', 'boat',
@@ -330,5 +341,5 @@ if __name__ == '__main__':
       if vis:
           # cv2.imshow('test', im2show)
           # cv2.waitKey(0)
-          result_path = os.path.join(args.image_dir, imglist[i][:-4] + "_det.jpg")
+          result_path = os.path.join(args.image_resdir, imglist[i][:-4] + "_det.jpg")
           cv2.imwrite(result_path, im2show)

@@ -55,8 +55,9 @@ for version in ['150-50-20', '150-50-50', '500-150-80', '750-250-150', '1750-700
         
 # Set up ucf101_<split>
 for split in ['train', 'val']:
-   name = 'ucf101_{}'.format(split)
-   __sets[name] = (lambda split=split: ucf101(split))
+   for feature in ['rgb', 'opf']:
+      name = 'ucf101_{}_{}'.format(split, feature)
+      __sets[name] = (lambda split=split, feature=feature: ucf101(split, feature))
 
 
 # set up image net.

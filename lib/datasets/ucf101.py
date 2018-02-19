@@ -23,13 +23,18 @@ import ipdb
 import re
 
 class ucf101(imdb):
-  def __init__(self, image_set):
+  def __init__(self, image_set, feature):
     imdb.__init__(self, 'ucf101_' + '_' + image_set)
     # name, paths
     self._image_set = image_set
     self._data_path = osp.join(cfg.DATA_DIR, 'ucf101')
     self.gtpath = '/sequoia/data2/gcheron/UCF101/detection/gtfile.py'
-    self.imagedir = 'images'
+
+    if feature == 'rgb':
+      self.imagedir = 'images'
+    elif feature == 'opf':
+      self.imagedir = 'OF_closest'
+
 
     self._classes = ('__background__',
                      'Basketball', 'BasketballDunk', 'Biking', 'CliffDiving', 'CricketBowling',
@@ -163,7 +168,6 @@ class ucf101(imdb):
       print('{} gt roidb loaded from {}'.format(self.name, cache_file))
       return roidb
 
-    ipdb.set_trace()
     gtfile = self.loadgtfile()
     gt_roidb = [self._load_ucf101_annotation(index, gtfile)
                 for index in self._image_index]
