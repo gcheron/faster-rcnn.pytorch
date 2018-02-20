@@ -62,8 +62,7 @@ def parse_args():
 
   parser.add_argument('--save_dir', dest='save_dir',
                       help='directory to save models',
-                      default="/sequoia/data2/gcheron/pytorch/faster-rcnn.pytorch/models",
-                      nargs=argparse.REMAINDER)
+                      default="/sequoia/data2/gcheron/pytorch/faster-rcnn.pytorch/models")
   parser.add_argument('--nw', dest='num_workers',
                       help='number of worker to load data',
                       default=0, type=int)
@@ -212,7 +211,7 @@ if __name__ == '__main__':
 
   print('{:d} roidb entries'.format(len(roidb)))
 
-  output_dir = args.save_dir + "/" + args.net + "/" + args.dataset
+  output_dir = args.save_dir + "/" + args.net + "/" + args.dataset + "_" + args.feature
   if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
