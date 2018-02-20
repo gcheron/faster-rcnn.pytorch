@@ -24,11 +24,12 @@ import re
 
 class ucf101(imdb):
   def __init__(self, image_set, feature):
-    imdb.__init__(self, 'ucf101_' + '_' + image_set)
+    imdb.__init__(self, 'ucf101_' + feature + '_' + image_set)
     # name, paths
     self._image_set = image_set
-    self._data_path = osp.join(cfg.DATA_DIR, 'ucf101')
-    self.gtpath = '/sequoia/data2/gcheron/UCF101/detection/gtfile.py'
+    datasetroot = osp.join(cfg.DATA_DIR, 'ucf101')
+    self._data_path = datasetroot
+    self.gtpath = datasetroot + '/detection/gtfile.py'
 
     if feature == 'rgb':
       self.imagedir = 'images'
@@ -46,9 +47,9 @@ class ucf101(imdb):
     gtfile = self.loadgtfile()
 
     if image_set == 'train':
-      vidlistpath = '/sequoia/data2/gcheron/UCF101/detection/OF_vidlist_train1.txt'
+      vidlistpath = datasetroot + '/detection/OF_vidlist_train1.txt'
     elif image_set == 'val':
-      vidlistpath = '/sequoia/data2/gcheron/UCF101/detection/OF_vidlist_test1.txt'
+      vidlistpath = datasetroot + '/detection/OF_vidlist_test1.txt'
     with open(vidlistpath) as f:
       vcontent = f.readlines()
     self.vidlist = [re.sub(' .*', '', x.strip()) for x in vcontent]
