@@ -205,7 +205,10 @@ class roibatchLoader(data.Dataset):
         gt_boxes = torch.FloatTensor([1,1,1,1,1])
         num_boxes = 0
 
-        return data, im_info, gt_boxes, num_boxes
+      	assert len(minibatch_db) == 1
+      	vidpath = minibatch_db[0]['image']
+
+        return data, im_info, gt_boxes, num_boxes, vidpath
 
   def __len__(self):
     return len(self._roidb)

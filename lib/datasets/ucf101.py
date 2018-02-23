@@ -46,13 +46,17 @@ class ucf101(imdb):
 
     gtfile = self.loadgtfile()
 
-    if image_set == 'train':
+    if image_set == 'train' or image_set == 'trainall':
       vidlistpath = datasetroot + '/detection/OF_vidlist_train1.txt'
-    elif image_set == 'val':
+    elif image_set == 'val' or image_set == 'valall':
       vidlistpath = datasetroot + '/detection/OF_vidlist_test1.txt'
     with open(vidlistpath) as f:
       vcontent = f.readlines()
     self.vidlist = [re.sub(' .*', '', x.strip()) for x in vcontent]
+
+    self.on_all_samples = False
+    if image_set == 'valall' or image_set == 'trainall':
+      self.on_all_samples = True # detect on all video frames
 
     self._class_to_ind = dict(list(zip(self.classes, list(range(self.num_classes)))))
     self._load_image_set_index()
@@ -109,7 +113,7 @@ class ucf101(imdb):
           if (fn >= tbound[0]) and (fn <= tbound[1]): # if the frame is inside the gt bound, add the gt instance
             add_inst.append(inst_idx)
 
-        if add_inst: # if the frame contains any gt
+        if add_inst or self.on_all_samples: # if the frame contains any gt or if we use all frames
           image_idx.append(idx)
           self._idx_2_gtinstance[idx] = (vid, add_inst, fn)
           widths[idx] = width

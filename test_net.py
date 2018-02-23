@@ -3,6 +3,9 @@
 # Licensed under The MIT License [see LICENSE for details]
 # Written by Jiasen Lu, Jianwei Yang, based on code from Ross Girshick
 # --------------------------------------------------------
+# command:
+# ipython test_net.py -- --dataset ucf101 --testset trainall --net res101 --cuda --feat rgb --checkepoch 2 --checkpoint 680671
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -57,7 +60,7 @@ def parse_args():
                       help='set config keys', default=None,
                       nargs=argparse.REMAINDER)
   parser.add_argument('--load_dir', dest='load_dir',
-                      help='directory to load models', default="/sequoia/data2/gcheron/pytorch/faster-rcnn.pytorch/models",
+                      help='directory to load models', default="./data/netdir",
                       nargs=argparse.REMAINDER)
   parser.add_argument('--cuda', dest='cuda',
                       help='whether use CUDA',
@@ -83,6 +86,12 @@ def parse_args():
   parser.add_argument('--checkpoint', dest='checkpoint',
                       help='checkpoint to load network',
                       default=10021, type=int)
+  parser.add_argument('--feat', dest='feature',
+                    help='rgb, opf',
+                    default='', type=str)
+  parser.add_argument('--testset', dest='testset',
+                    help='valall, trainall',
+                    default='', type=str)
   parser.add_argument('--bs', dest='batch_size',
                       help='batch_size',
                       default=1, type=int)
@@ -128,8 +137,7 @@ if __name__ == '__main__':
       args.imdbval_name = "vg_150-50-50_minival"
       args.set_cfgs = ['ANCHOR_SCALES', '[4, 8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]']
   elif args.dataset == "ucf101":
-      args.imdb_name = "ucf101_train"
-      args.imdbval_name = "ucf101_val"
+      args.imdbval_name = "ucf101_" + args.testset + "_" + args.feature
       args.set_cfgs = ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
 
   args.cfg_file = "cfgs/{}_ls.yml".format(args.net) if args.large_scale else "cfgs/{}.yml".format(args.net)
@@ -148,7 +156,7 @@ if __name__ == '__main__':
 
   print('{:d} roidb entries'.format(len(roidb)))
 
-  input_dir = args.load_dir + "/" + args.net + "/" + args.dataset
+  input_dir = args.load_dir + "/" + args.net + "/" + args.dataset + "_" + args.feature
   if not os.path.exists(input_dir):
     raise Exception('There is no input directory for loading network from ' + input_dir)
   load_name = os.path.join(input_dir,
@@ -215,7 +223,7 @@ if __name__ == '__main__':
   save_name = 'faster_rcnn_10'
   num_images = len(imdb.image_index)
   all_boxes = [[[] for _ in xrange(num_images)]
-               for _ in xrange(imdb.num_classes)]
+               for _ in xrange(imdb.num_classes + 1)] # last position is impath
 
   output_dir = get_output_dir(imdb, save_name)
   dataset = roibatchLoader(roidb, ratio_list, ratio_index, args.batch_size, \
@@ -238,6 +246,7 @@ if __name__ == '__main__':
       im_info.data.resize_(data[1].size()).copy_(data[1])
       gt_boxes.data.resize_(data[2].size()).copy_(data[2])
       num_boxes.data.resize_(data[3].size()).copy_(data[3])
+      impath = data[-1]
 
       det_tic = time.time()
       rois, cls_prob, bbox_pred, \
@@ -289,7 +298,7 @@ if __name__ == '__main__':
             else:
               cls_boxes = pred_boxes[inds][:, j * 4:(j + 1) * 4]
 
-            cls_dets = torch.cat((cls_boxes, cls_scores), 1)
+            cls_dets = torch.cat((cls_boxes, cls_scores[:, None]), 1)
             cls_dets = cls_dets[order]
             keep = nms(cls_dets, cfg.TEST.NMS)
             cls_dets = cls_dets[keep.view(-1).long()]
@@ -308,6 +317,8 @@ if __name__ == '__main__':
               for j in xrange(1, imdb.num_classes):
                   keep = np.where(all_boxes[j][i][:, -1] >= image_thresh)[0]
                   all_boxes[j][i] = all_boxes[j][i][keep, :]
+
+      all_boxes[-1][i] = impath
 
       misc_toc = time.time()
       nms_time = misc_toc - misc_tic
