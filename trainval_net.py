@@ -3,6 +3,9 @@
 # Licensed under The MIT License [see LICENSE for details]
 # Written by Jiasen Lu, Jianwei Yang, based on code from Ross Girshick
 # --------------------------------------------------------
+# commands:
+# ipython trainval_net.py -- --dataset daly --net res101 --cuda --feat rgb | tee log_train_rgb_DALY.txt
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -185,6 +188,10 @@ if __name__ == '__main__':
   elif args.dataset == "ucf101":
       args.imdb_name = "ucf101_train_" + args.feature
       args.imdbval_name = "ucf101_val_" + args.feature
+      args.set_cfgs = ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
+  elif args.dataset == "daly":
+      args.imdb_name = "daly_train_" + args.feature
+      args.imdbval_name = "daly_val_" + args.feature
       args.set_cfgs = ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
 
   args.cfg_file = "cfgs/{}_ls.yml".format(args.net) if args.large_scale else "cfgs/{}.yml".format(args.net)

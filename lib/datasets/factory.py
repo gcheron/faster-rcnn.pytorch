@@ -16,6 +16,7 @@ from datasets.coco import coco
 from datasets.imagenet import imagenet
 from datasets.vg import vg
 from datasets.ucf101 import ucf101
+from datasets.daly import daly
 
 import numpy as np
 
@@ -58,6 +59,12 @@ for split in ['train', 'val', 'trainall', 'valall']:
    for feature in ['rgb', 'opf']:
       name = 'ucf101_{}_{}'.format(split, feature)
       __sets[name] = (lambda split=split, feature=feature: ucf101(split, feature))
+
+# Set up daly_<split>
+for split in ['train', 'val', 'trainall', 'valall']:
+   for feature in ['rgb', 'opf']:
+      name = 'daly_{}_{}'.format(split, feature)
+      __sets[name] = (lambda split=split, feature=feature: daly(split, feature))
 
 
 # set up image net.
