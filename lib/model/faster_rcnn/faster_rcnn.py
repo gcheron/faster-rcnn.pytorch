@@ -13,23 +13,24 @@ from model.roi_crop.modules.roi_crop import _RoICrop
 from model.roi_align.modules.roi_align import RoIAlignAvg
 from model.rpn.proposal_target_layer_cascade import _ProposalTargetLayer
 import time
-import pdb
+import ipdb
 from model.utils.net_utils import _smooth_l1_loss, _crop_pool_layer, _affine_grid_gen, _affine_theta
 
 class _fasterRCNN(nn.Module):
     """ faster RCNN """
-    def __init__(self, classes, class_agnostic):
+    def __init__(self, classes, class_agnostic, K=-1):
         super(_fasterRCNN, self).__init__()
         self.classes = classes
         self.n_classes = len(classes)
         self.class_agnostic = class_agnostic
+        self.K = K # if K > 1, transform FasterRCNN to take a stack of K images as input
         # loss
         self.RCNN_loss_cls = 0
         self.RCNN_loss_bbox = 0
 
         # define rpn
-        self.RCNN_rpn = _RPN(self.dout_base_model)
-        self.RCNN_proposal_target = _ProposalTargetLayer(self.n_classes)
+        self.RCNN_rpn = _RPN(self.dout_base_model, K=self.K)
+        self.RCNN_proposal_target = _ProposalTargetLayer(self.n_classes, K=K)
         self.RCNN_roi_pool = _RoIPooling(cfg.POOLING_SIZE, cfg.POOLING_SIZE, 1.0/16.0)
         self.RCNN_roi_align = RoIAlignAvg(cfg.POOLING_SIZE, cfg.POOLING_SIZE, 1.0/16.0)
 
@@ -43,15 +44,24 @@ class _fasterRCNN(nn.Module):
         gt_boxes = gt_boxes.data
         num_boxes = num_boxes.data
 
-        # feed image data to base model to obtain base feature map
-        base_feat = self.RCNN_base(im_data)
+        if self.K > 1:
+            # check we have the same GT num for all images of the stack
+            _cmp = torch.nonzero( (gt_boxes[0] !=0).sum(1) ).numel()
+            for k in range(self.K-1):
+               assert torch.nonzero( (gt_boxes[k] !=0).sum(1) ).numel() == _cmp
+               assert num_boxes[0] == num_boxes[k]
 
-        # feed base feature map tp RPN to obtain rois
+        # feed image data to base model to obtain base feature map
+        base_feat = self.RCNN_base(im_data) # size [nBacth, nChan, H, W], usually nChan = 1024
+
+        # feed base feature map tp RPN to obtain rois, rois size: [nBacth, numTopProps, 1+4]
         rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes)
 
         # if it is training phrase, then use ground trubut bboxes for refining
         if self.training:
             roi_data = self.RCNN_proposal_target(rois, gt_boxes, num_boxes)
+            # rois size: [nBacth, numTopTrain], rois_target and weights sizes:  [nBacth, numTopTrain, 4]
+            # usually numTopTrain = 200
             rois, rois_label, rois_target, rois_inside_ws, rois_outside_ws = roi_data
 
             rois_label = Variable(rois_label.view(-1).long())
@@ -82,20 +92,44 @@ class _fasterRCNN(nn.Module):
         elif cfg.POOLING_MODE == 'pool':
             pooled_feat = self.RCNN_roi_pool(base_feat, rois.view(-1,5))
 
-        # feed pooled features to top model
+        # feed pooled features to top model, e.g. in resnet, this is the 4th block layer followed by average pooling
+        # on spatial dimension
+        # sizes: [nBacth x nRoi, nChan, poolSize, poolSize] --> [nBacth x nRoi, nOutChan]
+        # usually poolSize = 7 and nOutChan = 2048
         pooled_feat = self._head_to_tail(pooled_feat)
 
+        if self.K > 1:
+            # stack channels from all images making nBatch = 1
+            nrois = rois.size(1)
+            _, nc = pooled_feat.shape
+            pooled_feat = pooled_feat.view(self.K, nrois, nc) # [nBacth, nRoi, nOutChan]
+            pooled_feat.transpose_(0,1)
+            pooled_feat = pooled_feat.contiguous().view(nrois, -1) # [nRoi, nBacth x nOutChan]
+
         # compute bbox offset
+        # if not class agnostic: bbox_pred size [nBacth x nRoi, 4 x nClasses], nClasses includes bkg
         bbox_pred = self.RCNN_bbox_pred(pooled_feat)
+        if self.K > 1:
+            # reshape in the expected order
+            bbox_pred = bbox_pred.view(nrois, self.K, self.n_classes * 4)
+            bbox_pred = bbox_pred.transpose(0,1) # not inplace prevent autograd error
+            bbox_pred = bbox_pred.contiguous().view(nrois * self.K, -1)
+
         if self.training and not self.class_agnostic:
             # select the corresponding columns according to roi labels
             bbox_pred_view = bbox_pred.view(bbox_pred.size(0), int(bbox_pred.size(1) / 4), 4)
             bbox_pred_select = torch.gather(bbox_pred_view, 1, rois_label.view(rois_label.size(0), 1, 1).expand(rois_label.size(0), 1, 4))
             bbox_pred = bbox_pred_select.squeeze(1)
 
-        # compute object classification probability
+        # compute object classification probability of size: [nBacth x nRoi, nClasses]
         cls_score = self.RCNN_cls_score(pooled_feat)
-        cls_prob = F.softmax(cls_score)
+        if self.K > 1:
+            # we predict only one score for the whole stack, replicate it
+            cls_score.unsqueeze_(0)
+            cls_score = cls_score.repeat(self.K, 1, 1)
+            cls_score = cls_score.view(-1, self.n_classes)
+
+        cls_prob = F.softmax(cls_score, dim=1)
 
         RCNN_loss_cls = 0
         RCNN_loss_bbox = 0
@@ -108,8 +142,8 @@ class _fasterRCNN(nn.Module):
             RCNN_loss_bbox = _smooth_l1_loss(bbox_pred, rois_target, rois_inside_ws, rois_outside_ws)
 
 
-        cls_prob = cls_prob.view(batch_size, rois.size(1), -1)
-        bbox_pred = bbox_pred.view(batch_size, rois.size(1), -1)
+        cls_prob = cls_prob.view(batch_size, rois.size(1), -1) # [nBacth, nRoi, nClasses]
+        bbox_pred = bbox_pred.view(batch_size, rois.size(1), -1) # [nBacth, nRoi, 4 or 4 x nClasses]
 
         return rois, cls_prob, bbox_pred, rpn_loss_cls, rpn_loss_bbox, RCNN_loss_cls, RCNN_loss_bbox, rois_label
 

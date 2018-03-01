@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 import math
 import torch.utils.model_zoo as model_zoo
-import pdb
+import ipdb
 
 __all__ = ['ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet101',
        'resnet152']
@@ -218,13 +218,14 @@ def resnet152(pretrained=False):
   return model
 
 class resnet(_fasterRCNN):
-  def __init__(self, classes, num_layers=101, pretrained=False, class_agnostic=False):
+  def __init__(self, classes, num_layers=101, pretrained=False, class_agnostic=False, K=-1):
     self.model_path = 'data/pretrained_model/resnet101_caffe.pth'
     self.dout_base_model = 1024
     self.pretrained = pretrained
     self.class_agnostic = class_agnostic
+    self.K = K # if K > 1, transform FasterRCNN to take a stack of K images as input
 
-    _fasterRCNN.__init__(self, classes, class_agnostic)
+    _fasterRCNN.__init__(self, classes, class_agnostic, K=self.K)
 
   def _init_modules(self):
     resnet = resnet101()
@@ -240,11 +241,17 @@ class resnet(_fasterRCNN):
 
     self.RCNN_top = nn.Sequential(resnet.layer4)
 
-    self.RCNN_cls_score = nn.Linear(2048, self.n_classes)
+    inSize = 2048
+    outSize = 4
+    if self.K > 1:
+      inSize *= self.K
+      outSize *= self.K
+
+    self.RCNN_cls_score = nn.Linear(inSize, self.n_classes)
     if self.class_agnostic:
-      self.RCNN_bbox_pred = nn.Linear(2048, 4)
+      self.RCNN_bbox_pred = nn.Linear(inSize, outSize)
     else:
-      self.RCNN_bbox_pred = nn.Linear(2048, 4 * self.n_classes)
+      self.RCNN_bbox_pred = nn.Linear(inSize, outSize * self.n_classes)
 
     # Fix blocks
     for p in self.RCNN_base[0].parameters(): p.requires_grad=False

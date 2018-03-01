@@ -11,18 +11,21 @@ from model.utils.net_utils import _smooth_l1_loss
 
 import numpy as np
 import math
-import pdb
+import ipdb
 import time
 
 class _RPN(nn.Module):
     """ region proposal network """
-    def __init__(self, din):
+    def __init__(self, din, K=-1):
         super(_RPN, self).__init__()
         
         self.din = din  # get depth of input feature map, e.g., 512
         self.anchor_scales = cfg.ANCHOR_SCALES
         self.anchor_ratios = cfg.ANCHOR_RATIOS
         self.feat_stride = cfg.FEAT_STRIDE[0]
+        self.K = K # if K > 1, transform RPN to take a stack of K images as input
+        if self.K > 1:
+          self.din *= self.K
 
         # define the convrelu layers processing input feature map
         self.RPN_Conv = nn.Conv2d(self.din, 512, 3, 1, 1, bias=True)
@@ -33,13 +36,15 @@ class _RPN(nn.Module):
 
         # define anchor box offset prediction layer
         self.nc_bbox_out = len(self.anchor_scales) * len(self.anchor_ratios) * 4 # 4(coords) * 9 (anchors)
+        if self.K > 1:
+          self.nc_bbox_out *= self.K # predict one deviation per anchor
         self.RPN_bbox_pred = nn.Conv2d(512, self.nc_bbox_out, 1, 1, 0)
 
         # define proposal layer
-        self.RPN_proposal = _ProposalLayer(self.feat_stride, self.anchor_scales, self.anchor_ratios)
+        self.RPN_proposal = _ProposalLayer(self.feat_stride, self.anchor_scales, self.anchor_ratios, K=K)
 
         # define anchor target layer
-        self.RPN_anchor_target = _AnchorTargetLayer(self.feat_stride, self.anchor_scales, self.anchor_ratios)
+        self.RPN_anchor_target = _AnchorTargetLayer(self.feat_stride, self.anchor_scales, self.anchor_ratios, K=K)
 
         self.rpn_loss_cls = 0
         self.rpn_loss_box = 0
@@ -56,24 +61,40 @@ class _RPN(nn.Module):
         return x
 
     def forward(self, base_feat, im_info, gt_boxes, num_boxes):
+        # base_feat size: [nBacth, nChan, H, W], usually nChan = 1024
 
         batch_size = base_feat.size(0)
+        if self.K > 1:
+            assert batch_size == self.K
+            # stack channels from all images making nBatch = 1
+            bs, nc, h, w = base_feat.shape
+            base_feat = base_feat.view(1, bs * nc, h, w)
 
         # return feature map after convrelu layer
-        rpn_conv1 = F.relu(self.RPN_Conv(base_feat), inplace=True)
+        rpn_conv1 = F.relu(self.RPN_Conv(base_feat), inplace=True) # size: [nBacth, nChan, H, W], usually nChan = 512 
         # get rpn classification score
-        rpn_cls_score = self.RPN_cls_score(rpn_conv1)
+        rpn_cls_score = self.RPN_cls_score(rpn_conv1) # size: [nBacth, 2 x nAnchors, H, W]
+        if self.K > 1:
+            # we predict same anchor score for all stack images, so we duplicate score making nBatch back to K
+            rpn_cls_score = rpn_cls_score.repeat(self.K, 1, 1, 1)
 
-        rpn_cls_score_reshape = self.reshape(rpn_cls_score, 2)
-        rpn_cls_prob_reshape = F.softmax(rpn_cls_score_reshape)
-        rpn_cls_prob = self.reshape(rpn_cls_prob_reshape, self.nc_score_out)
+        # reshape to perform softmax on bg/fg by sending bg/fg on dim=1
+        rpn_cls_score_reshape = self.reshape(rpn_cls_score, 2) # size [nBacth, 2, nAnchors x H, W]
+        rpn_cls_prob_reshape = F.softmax(rpn_cls_score_reshape, dim=1) # same size as above
+        rpn_cls_prob = self.reshape(rpn_cls_prob_reshape, self.nc_score_out) # back to [nBacth, 2 x nAnchors, H, W]
 
         # get rpn offsets to the anchor boxes
-        rpn_bbox_pred = self.RPN_bbox_pred(rpn_conv1)
+        rpn_bbox_pred = self.RPN_bbox_pred(rpn_conv1) # size [nBacth, 4 x nAnchors, H, W]
+        if self.K > 1:
+            # get the deviation for each stacked image making nBatch back to K
+            rpn_bbox_pred = rpn_bbox_pred.view(self.K, self.nc_bbox_out / self.K, h, w)
 
         # proposal layer
         cfg_key = 'TRAIN' if self.training else 'TEST'
 
+        # rois size: [nBacth, numTopProps, 1+4] (last dim: batch_id + 4 coords.), usually numTopProps = 2000
+        # NOTE for K > 1: ensure that if filtering, NMS, sorting, etc... in RPN_proposal select one proposal
+        # coming from a given anchor in an image, it is also selected in the other images.
         rois = self.RPN_proposal((rpn_cls_prob.data, rpn_bbox_pred.data,
                                  im_info, cfg_key))
 
@@ -84,19 +105,26 @@ class _RPN(nn.Module):
         if self.training:
             assert gt_boxes is not None
 
+            # gt_boxes size: [nBacth, maxGT, 4+class], usually maxGT = 20
             rpn_data = self.RPN_anchor_target((rpn_cls_score.data, gt_boxes, im_info, num_boxes))
 
             # compute classification loss
             rpn_cls_score = rpn_cls_score_reshape.permute(0, 2, 3, 1).contiguous().view(batch_size, -1, 2)
-            rpn_label = rpn_data[0].view(batch_size, -1)
+            rpn_label = rpn_data[0].view(batch_size, -1) # size [nBatch, nAnchors x H x W]
+            if self.K > 1:
+               for k in range(self.K-1): assert not rpn_label[0].ne(rpn_label[k]).any()
 
+            # get index we keep for classification: rpn_keep size [nBatch x rpnBatch] (this is a vector)
             rpn_keep = Variable(rpn_label.view(-1).ne(-1).nonzero().view(-1))
-            rpn_cls_score = torch.index_select(rpn_cls_score.view(-1,2), 0, rpn_keep)
+
+            # select proposal we keep
+            rpn_cls_score = torch.index_select(rpn_cls_score.view(-1,2), 0, rpn_keep) # size [nBatch x rpbBatch, 2]
             rpn_label = torch.index_select(rpn_label.view(-1), 0, rpn_keep.data)
-            rpn_label = Variable(rpn_label.long())
+            rpn_label = Variable(rpn_label.long()) # size [nBatch x rpbBatch]
             self.rpn_loss_cls = F.cross_entropy(rpn_cls_score, rpn_label)
             fg_cnt = torch.sum(rpn_label.data.ne(0))
 
+            # targets and associated weights have sizes: [nBacth, 4 x nAnchors, H, W]
             rpn_bbox_targets, rpn_bbox_inside_weights, rpn_bbox_outside_weights = rpn_data[1:]
 
             # compute bbox regression loss

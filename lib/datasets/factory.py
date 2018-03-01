@@ -57,14 +57,22 @@ for version in ['150-50-20', '150-50-50', '500-150-80', '750-250-150', '1750-700
 # Set up ucf101_<split>
 for split in ['train', 'val', 'trainall', 'valall']:
    for feature in ['rgb', 'opf']:
-      name = 'ucf101_{}_{}'.format(split, feature)
-      __sets[name] = (lambda split=split, feature=feature: ucf101(split, feature))
+     for K in np.arange(1, 11).tolist():
+       if K > 1:
+        name = 'ucf101_{}_{}_K{}'.format(split, feature, K)
+       else:
+        name = 'ucf101_{}_{}'.format(split, feature)
+       __sets[name] = (lambda split=split, feature=feature, K=K: ucf101(split, feature, K))
 
 # Set up daly_<split>
 for split in ['train', 'val', 'trainall', 'valall']:
    for feature in ['rgb', 'opf']:
-      name = 'daly_{}_{}'.format(split, feature)
-      __sets[name] = (lambda split=split, feature=feature: daly(split, feature))
+     for K in np.arange(1, 11).tolist():
+       if K > 1:
+         name = 'daly_{}_{}_K{}'.format(split, feature, K)
+       else:
+         name = 'daly_{}_{}'.format(split, feature)
+       __sets[name] = (lambda split=split, feature=feature, K=K: daly(split, feature, K))
 
 
 # set up image net.

@@ -15,7 +15,7 @@ import numpy as np
 import numpy.random as npr
 from ..utils.config import cfg
 from .bbox_transform import bbox_overlaps_batch, bbox_transform_batch
-import pdb
+import ipdb
 
 class _ProposalTargetLayer(nn.Module):
     """
@@ -23,12 +23,13 @@ class _ProposalTargetLayer(nn.Module):
     classification labels and bounding-box regression targets.
     """
 
-    def __init__(self, nclasses):
+    def __init__(self, nclasses, K=-1):
         super(_ProposalTargetLayer, self).__init__()
         self._num_classes = nclasses
         self.BBOX_NORMALIZE_MEANS = torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS)
         self.BBOX_NORMALIZE_STDS = torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_STDS)
         self.BBOX_INSIDE_WEIGHTS = torch.FloatTensor(cfg.TRAIN.BBOX_INSIDE_WEIGHTS)
+        self.K = K
 
     def forward(self, all_rois, gt_boxes, num_boxes):
 
@@ -118,10 +119,27 @@ class _ProposalTargetLayer(nn.Module):
         examples.
         """
         # overlaps: (rois x gt_boxes)
-
+        # invalid bboxes with 0 area have overlap set to -1
         overlaps = bbox_overlaps_batch(all_rois, gt_boxes)
 
+        if self.K > 1:
+          # if K > 1, gt assignment is computed as the max of the average overlaps on the K frames of the linked gt
+          # here, given a roi, all other rois if we change batch_dim come from the same anchor
+
+          # if one box is invalid in a frame, make all its corresponding boxes also invalid
+          invalids_ = (overlaps[:, :, 0] == -1).sum(0).ge(1) # get boxes invalid in at least one frame
+          invalids_ = invalids_.view(1, -1, 1).repeat(self.K, 1, overlaps.shape[2])
+          overlaps[invalids_] = -1
+
+          # use 3D overlap: for a given roi, we want it to have the same label in each image of the stack
+          overlaps = overlaps.mean(0).view(1, overlaps.shape[1], overlaps.shape[2])
+
         max_overlaps, gt_assignment = torch.max(overlaps, 2)
+
+        if self.K > 1:
+            overlaps = overlaps.repeat(self.K, 1, 1)
+            max_overlaps = max_overlaps.repeat(self.K, 1)
+            gt_assignment = gt_assignment.repeat(self.K, 1)
 
         batch_size = overlaps.size(0)
         num_proposal = overlaps.size(1)
@@ -144,53 +162,55 @@ class _ProposalTargetLayer(nn.Module):
             fg_num_rois = fg_inds.numel()
 
             # Select background RoIs as those within [BG_THRESH_LO, BG_THRESH_HI)
+            # Note invalid bboxes (0 area) are discarded
             bg_inds = torch.nonzero((max_overlaps[i] < cfg.TRAIN.BG_THRESH_HI) &
                                     (max_overlaps[i] >= cfg.TRAIN.BG_THRESH_LO)).view(-1)
             bg_num_rois = bg_inds.numel()
 
-            if fg_num_rois > 0 and bg_num_rois > 0:
-                # sampling fg
-                fg_rois_per_this_image = min(fg_rois_per_image, fg_num_rois)
+            if self.K <= 1 or i == 0: # in stack case (K>1) make the selection only once
+                if fg_num_rois > 0 and bg_num_rois > 0:
+                    # sampling fg
+                    fg_rois_per_this_image = min(fg_rois_per_image, fg_num_rois)
+
+                    # torch.randperm seems has a bug on multi-gpu setting that cause the segfault.
+                    # See https://github.com/pytorch/pytorch/issues/1868 for more details.
+                    # use numpy instead.
+                    #rand_num = torch.randperm(fg_num_rois).long().cuda()
+                    rand_num = torch.from_numpy(np.random.permutation(fg_num_rois)).type_as(gt_boxes).long()
+                    fg_inds = fg_inds[rand_num[:fg_rois_per_this_image]]
+
+                    # sampling bg
+                    bg_rois_per_this_image = rois_per_image - fg_rois_per_this_image
+
+                    # Seems torch.rand has a bug, it will generate very large number and make an error.
+                    # We use numpy rand instead.
+                    #rand_num = (torch.rand(bg_rois_per_this_image) * bg_num_rois).long().cuda()
+                    rand_num = np.floor(np.random.rand(bg_rois_per_this_image) * bg_num_rois)
+                    rand_num = torch.from_numpy(rand_num).type_as(gt_boxes).long()
+                    bg_inds = bg_inds[rand_num]
+
+                elif fg_num_rois > 0 and bg_num_rois == 0:
+                    # sampling fg
+                    #rand_num = torch.floor(torch.rand(rois_per_image) * fg_num_rois).long().cuda()
+                    rand_num = np.floor(np.random.rand(rois_per_image) * fg_num_rois)
+                    rand_num = torch.from_numpy(rand_num).type_as(gt_boxes).long()
+                    fg_inds = fg_inds[rand_num]
+                    fg_rois_per_this_image = rois_per_image
+                    bg_rois_per_this_image = 0
+                elif bg_num_rois > 0 and fg_num_rois == 0:
+                    # sampling bg
+                    #rand_num = torch.floor(torch.rand(rois_per_image) * bg_num_rois).long().cuda()
+                    rand_num = np.floor(np.random.rand(rois_per_image) * bg_num_rois)
+                    rand_num = torch.from_numpy(rand_num).type_as(gt_boxes).long()
+
+                    bg_inds = bg_inds[rand_num]
+                    bg_rois_per_this_image = rois_per_image
+                    fg_rois_per_this_image = 0
+                else:
+                    raise ValueError("bg_num_rois = 0 and fg_num_rois = 0, this should not happen!")
                 
-                # torch.randperm seems has a bug on multi-gpu setting that cause the segfault. 
-                # See https://github.com/pytorch/pytorch/issues/1868 for more details.
-                # use numpy instead.
-                #rand_num = torch.randperm(fg_num_rois).long().cuda()
-                rand_num = torch.from_numpy(np.random.permutation(fg_num_rois)).type_as(gt_boxes).long()
-                fg_inds = fg_inds[rand_num[:fg_rois_per_this_image]]
-
-                # sampling bg
-                bg_rois_per_this_image = rois_per_image - fg_rois_per_this_image
-
-                # Seems torch.rand has a bug, it will generate very large number and make an error. 
-                # We use numpy rand instead. 
-                #rand_num = (torch.rand(bg_rois_per_this_image) * bg_num_rois).long().cuda()
-                rand_num = np.floor(np.random.rand(bg_rois_per_this_image) * bg_num_rois)
-                rand_num = torch.from_numpy(rand_num).type_as(gt_boxes).long()
-                bg_inds = bg_inds[rand_num]
-
-            elif fg_num_rois > 0 and bg_num_rois == 0:
-                # sampling fg
-                #rand_num = torch.floor(torch.rand(rois_per_image) * fg_num_rois).long().cuda()
-                rand_num = np.floor(np.random.rand(rois_per_image) * fg_num_rois)
-                rand_num = torch.from_numpy(rand_num).type_as(gt_boxes).long()
-                fg_inds = fg_inds[rand_num]
-                fg_rois_per_this_image = rois_per_image
-                bg_rois_per_this_image = 0
-            elif bg_num_rois > 0 and fg_num_rois == 0:
-                # sampling bg
-                #rand_num = torch.floor(torch.rand(rois_per_image) * bg_num_rois).long().cuda()
-                rand_num = np.floor(np.random.rand(rois_per_image) * bg_num_rois)
-                rand_num = torch.from_numpy(rand_num).type_as(gt_boxes).long()
-
-                bg_inds = bg_inds[rand_num]
-                bg_rois_per_this_image = rois_per_image
-                fg_rois_per_this_image = 0
-            else:
-                raise ValueError("bg_num_rois = 0 and fg_num_rois = 0, this should not happen!")
-                
-            # The indices that we're selecting (both fg and bg)
-            keep_inds = torch.cat([fg_inds, bg_inds], 0)
+                # The indices that we're selecting (both fg and bg)
+                keep_inds = torch.cat([fg_inds, bg_inds], 0)
 
             # Select sampled values from various arrays:
             labels_batch[i].copy_(labels[i][keep_inds])

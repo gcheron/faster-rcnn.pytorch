@@ -20,7 +20,7 @@ import time
 import pdb
 
 class roibatchLoader(data.Dataset):
-  def __init__(self, roidb, ratio_list, ratio_index, batch_size, num_classes, training=True, normalize=None):
+  def __init__(self, roidb, ratio_list, ratio_index, batch_size, num_classes, training=True, normalize=None, stack_inputs=False):
     self._roidb = roidb
     self._num_classes = num_classes
     # we make the height of image consistent to trim_height, trim_width
@@ -33,10 +33,18 @@ class roibatchLoader(data.Dataset):
     self.ratio_index = ratio_index
     self.batch_size = batch_size
     self.data_size = len(self.ratio_list)
+    self.stack_inputs = stack_inputs
 
     # given the ratio_list, we want to make the ratio same for each batch.
     self.ratio_list_batch = torch.Tensor(self.data_size).zero_()
     num_batch = int(np.ceil(len(ratio_index) / batch_size))
+
+    if self.stack_inputs: # all stack images have the same ratio...
+      self.ratio_index = -1 # this should not be use anymore
+      for i in range(self.data_size):
+        self.ratio_list_batch[i] = ratio_list[i]
+      return
+
     for i in range(num_batch):
         left_idx = i*batch_size
         right_idx = min((i+1)*batch_size-1, self.data_size-1)
@@ -55,7 +63,7 @@ class roibatchLoader(data.Dataset):
 
 
   def __getitem__(self, index):
-    if self.training:
+    if self.training and not self.stack_inputs:
         index_ratio = int(self.ratio_index[index])
     else:
         index_ratio = index
@@ -67,10 +75,20 @@ class roibatchLoader(data.Dataset):
     blobs = get_minibatch(minibatch_db, self._num_classes)
     data = torch.from_numpy(blobs['data'])
     im_info = torch.from_numpy(blobs['im_info'])
+
+    assert len(minibatch_db) == 1
+    vidpath = minibatch_db[0]['image']
+    gt_ids = None
+
     # we need to random shuffle the bounding box.
     data_height, data_width = data.size(1), data.size(2)
     if self.training:
-        np.random.shuffle(blobs['gt_boxes'])
+        #np.random.shuffle(blobs['gt_boxes'])
+        randp = np.random.permutation(blobs['gt_boxes'].shape[0])
+        blobs['gt_boxes'] = blobs['gt_boxes'][randp]
+        if 'gt_ids' in blobs:
+          gt_ids = blobs['gt_ids'][randp]
+
         gt_boxes = torch.from_numpy(blobs['gt_boxes'])
 
         ########################################################
@@ -190,23 +208,27 @@ class roibatchLoader(data.Dataset):
             gt_boxes = gt_boxes[keep]
             num_boxes = min(gt_boxes.size(0), self.max_num_box)
             gt_boxes_padding[:num_boxes,:] = gt_boxes[:num_boxes]
+            if not gt_ids is None:
+               gt_ids_padding = - np.ones((self.max_num_box), dtype=int)
+               gt_ids = gt_ids[keep]
+               gt_ids_padding[:num_boxes] = gt_ids[:num_boxes]
+               gt_ids = gt_ids_padding
+               assert (gt_ids >= 0).sum() == num_boxes
         else:
             num_boxes = 0
+            gt_ids = None
 
             # permute trim_data to adapt to downstream processing
         padding_data = padding_data.permute(2, 0, 1).contiguous()
         im_info = im_info.view(3)
 
-        return padding_data, im_info, gt_boxes_padding, num_boxes
+        return padding_data, im_info, gt_boxes_padding, num_boxes, (vidpath, ratio, gt_ids)
     else:
         data = data.permute(0, 3, 1, 2).contiguous().view(3, data_height, data_width)
         im_info = im_info.view(3)
 
         gt_boxes = torch.FloatTensor([1,1,1,1,1])
         num_boxes = 0
-
-      	assert len(minibatch_db) == 1
-      	vidpath = minibatch_db[0]['image']
 
         return data, im_info, gt_boxes, num_boxes, vidpath
 

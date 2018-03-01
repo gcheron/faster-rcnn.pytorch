@@ -18,7 +18,7 @@ from model.utils.config import cfg
 from .generate_anchors import generate_anchors
 from .bbox_transform import clip_boxes, bbox_overlaps_batch, bbox_transform_batch
 
-import pdb
+import ipdb
 
 DEBUG = False
 
@@ -33,7 +33,7 @@ class _AnchorTargetLayer(nn.Module):
         Assign anchors to ground-truth targets. Produces anchor classification
         labels and bounding-box regression targets.
     """
-    def __init__(self, feat_stride, scales, ratios):
+    def __init__(self, feat_stride, scales, ratios, K=-1):
         super(_AnchorTargetLayer, self).__init__()
 
         self._feat_stride = feat_stride
@@ -44,6 +44,7 @@ class _AnchorTargetLayer(nn.Module):
 
         # allow boxes to sit over the edge by a small amount
         self._allowed_border = 0  # default is 0
+        self.K = K
 
     def forward(self, input):
         # Algorithm:
@@ -97,18 +98,30 @@ class _AnchorTargetLayer(nn.Module):
 
         overlaps = bbox_overlaps_batch(anchors, gt_boxes)
 
+        if self.K > 1:
+          # use 3D overlap: for a given anchor, we want it to have the same label in each image of the stack
+          overlaps = overlaps.mean(0).view(1, overlaps.shape[1], overlaps.shape[2])
+
         max_overlaps, argmax_overlaps = torch.max(overlaps, 2)
         gt_max_overlaps, _ = torch.max(overlaps, 1)
+
+        if self.K > 1:
+            overlaps = overlaps.repeat(self.K, 1, 1)
+            max_overlaps = max_overlaps.repeat(self.K, 1)
+            argmax_overlaps = argmax_overlaps.repeat(self.K, 1)
+            gt_max_overlaps = gt_max_overlaps.repeat(self.K, 1)
 
         if not cfg.TRAIN.RPN_CLOBBER_POSITIVES:
             labels[max_overlaps < cfg.TRAIN.RPN_NEGATIVE_OVERLAP] = 0
 
+        # keep anchors with maximum overlap with the GT
         gt_max_overlaps[gt_max_overlaps==0] = 1e-5
         keep = torch.sum(overlaps.eq(gt_max_overlaps.view(batch_size,1,-1).expand_as(overlaps)), 2)
 
         if torch.sum(keep) > 0:
             labels[keep>0] = 1
 
+        # also keep anchors with overlap above positive threshold
         # fg label: above threshold IOU
         labels[max_overlaps >= cfg.TRAIN.RPN_POSITIVE_OVERLAP] = 1
 
@@ -130,7 +143,10 @@ class _AnchorTargetLayer(nn.Module):
                 #rand_num = torch.randperm(fg_inds.size(0)).type_as(gt_boxes).long()
                 rand_num = torch.from_numpy(np.random.permutation(fg_inds.size(0))).type_as(gt_boxes).long()
                 disable_inds = fg_inds[rand_num[:fg_inds.size(0)-num_fg]]
-                labels[i][disable_inds] = -1
+                if self.K > 1:
+                  labels[:, disable_inds] = -1
+                else:
+                  labels[i][disable_inds] = -1
 
             num_bg = cfg.TRAIN.RPN_BATCHSIZE - sum_fg[i]
 
@@ -141,7 +157,13 @@ class _AnchorTargetLayer(nn.Module):
 
                 rand_num = torch.from_numpy(np.random.permutation(bg_inds.size(0))).type_as(gt_boxes).long()
                 disable_inds = bg_inds[rand_num[:bg_inds.size(0)-num_bg]]
-                labels[i][disable_inds] = -1
+                if self.K > 1:
+                   labels[:, disable_inds] = -1
+                else:
+                   labels[i][disable_inds] = -1
+
+            if self.K > 1:
+               break # do only one loop
 
         offset = torch.arange(0, batch_size)*gt_boxes.size(1)
 

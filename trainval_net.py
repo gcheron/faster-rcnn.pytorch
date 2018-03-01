@@ -16,8 +16,9 @@ import sys
 import numpy as np
 import argparse
 import pprint
-import pdb
+import ipdb
 import time
+import re
 
 import torch
 from torch.autograd import Variable
@@ -59,6 +60,9 @@ def parse_args():
   parser.add_argument('--checkpoint_interval', dest='checkpoint_interval',
                       help='number of iterations to display',
                       default=10000, type=int)
+  parser.add_argument('--save_each_it', dest='save_each_it',
+                      help='save model each N iterations',
+                      default=10000, type=int)
   parser.add_argument('--feat', dest='feature',
                     help='rgb, opf',
                     default='', type=str)
@@ -83,6 +87,9 @@ def parse_args():
                       default=1, type=int)
   parser.add_argument('--cag', dest='class_agnostic',
                       help='whether perform class_agnostic bbox regression',
+                      action='store_true')
+  parser.add_argument('--stack_inputs', dest='stack_inputs',
+                      help='stack the <bs> inputs for prediction',
                       action='store_true')
 
 # config optimization
@@ -127,7 +134,7 @@ def parse_args():
 
 
 class sampler(Sampler):
-  def __init__(self, train_size, batch_size):
+  def __init__(self, train_size, batch_size, imdb=None, onstack=False):
     self.num_data = train_size
     self.num_per_batch = int(train_size / batch_size)
     self.batch_size = batch_size
@@ -137,8 +144,21 @@ class sampler(Sampler):
       self.leftover = torch.arange(self.num_per_batch*batch_size, train_size).long()
       self.leftover_flag = True
 
+    self.onstack = onstack
+    if onstack:
+      self.stack_index = imdb._stack_index
+
   def __iter__(self):
-    rand_num = torch.randperm(self.num_per_batch).view(-1,1) * self.batch_size
+    if self.onstack:
+      assert not self.leftover_flag
+      # we loop on stack indices, that are equaly spaced by <bs>
+      # in order to point at the begining of the stacks
+      # shuffle the stack beginings
+      rand_num = torch.randperm(len(self.stack_index))
+      rand_num = torch.LongTensor(self.stack_index)[rand_num].view(-1, 1)
+
+    else:
+      rand_num = torch.randperm(self.num_per_batch).view(-1,1) * self.batch_size
     self.rand_num = rand_num.expand(self.num_per_batch, self.batch_size) + self.range
 
     self.rand_num_view = self.rand_num.view(-1)
@@ -194,6 +214,12 @@ if __name__ == '__main__':
       args.imdbval_name = "daly_val_" + args.feature
       args.set_cfgs = ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
 
+  K = -1
+  if args.stack_inputs:
+    K = args.batch_size
+    args.imdb_name += '_K%d' % K
+    args.imdbval_name += '_K%d' % K
+
   args.cfg_file = "cfgs/{}_ls.yml".format(args.net) if args.large_scale else "cfgs/{}.yml".format(args.net)
 
   if args.cfg_file is not None:
@@ -204,6 +230,8 @@ if __name__ == '__main__':
   print('Using config:')
   pprint.pprint(cfg)
   np.random.seed(cfg.RNG_SEED)
+  torch.manual_seed(cfg.RNG_SEED)
+  torch.cuda.manual_seed(cfg.RNG_SEED)
 
   #torch.backends.cudnn.benchmark = True
   if torch.cuda.is_available() and not args.cuda:
@@ -214,18 +242,25 @@ if __name__ == '__main__':
   cfg.TRAIN.USE_FLIPPED = True
   cfg.USE_GPU_NMS = args.cuda
   imdb, roidb, ratio_list, ratio_index = combined_roidb(args.imdb_name)
-  train_size = len(roidb)
+  if args.stack_inputs:
+    train_size = len(imdb._stack_index) * args.batch_size
+  else:
+    train_size = len(roidb)
 
   print('{:d} roidb entries'.format(len(roidb)))
 
   output_dir = args.save_dir + "/" + args.net + "/" + args.dataset + "_" + args.feature
+  if args.stack_inputs:
+    output_dir += "_K%d" % args.batch_size
+
+  output_dir += "/" + args.dataset + "_" + args.feature
   if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
-  sampler_batch = sampler(train_size, args.batch_size)
+  sampler_batch = sampler(train_size, args.batch_size, imdb, args.stack_inputs)
 
   dataset = roibatchLoader(roidb, ratio_list, ratio_index, args.batch_size, \
-                           imdb.num_classes, training=True)
+                           imdb.num_classes, training=True, stack_inputs = args.stack_inputs)
 
   dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size,
                             sampler=sampler_batch, num_workers=args.num_workers)
@@ -257,14 +292,14 @@ if __name__ == '__main__':
   if args.net == 'vgg16':
     fasterRCNN = vgg16(imdb.classes, pretrained=True, class_agnostic=args.class_agnostic)
   elif args.net == 'res101':
-    fasterRCNN = resnet(imdb.classes, 101, pretrained=True, class_agnostic=args.class_agnostic)
+    fasterRCNN = resnet(imdb.classes, 101, pretrained=True, class_agnostic=args.class_agnostic, K=K)
   elif args.net == 'res50':
-    fasterRCNN = resnet(imdb.classes, 50, pretrained=True, class_agnostic=args.class_agnostic)
+    fasterRCNN = resnet(imdb.classes, 50, pretrained=True, class_agnostic=args.class_agnostic, K=K)
   elif args.net == 'res152':
-    fasterRCNN = resnet(imdb.classes, 152, pretrained=True, class_agnostic=args.class_agnostic)
+    fasterRCNN = resnet(imdb.classes, 152, pretrained=True, class_agnostic=args.class_agnostic, K=K)
   else:
     print("network is not defined")
-    pdb.set_trace()
+    ipdb.set_trace()
 
   fasterRCNN.create_architecture()
 
@@ -326,6 +361,46 @@ if __name__ == '__main__':
       data = next(data_iter)
       im_data.data.resize_(data[0].size()).copy_(data[0])
       im_info.data.resize_(data[1].size()).copy_(data[1])
+
+      if args.stack_inputs:
+        paths, ratios, gt_ids = data[4]
+
+        # check that stack data is valid
+        assert len(paths) == K
+        pframe = -1
+        for ii in range(len(paths)):
+          rres = re.match('.*/([^/]*)/image-([0-9]*)\.jpg', paths[ii])
+          vname = rres.group(1)
+          frnum = int(rres.group(2))
+          if pframe != -1:
+            assert pframe + 1 == frnum, 'expect consecutive frames'
+            assert vname == pvid, 'expect same video name'
+          pvid = vname
+          pframe = frnum
+          assert ratios[0] == ratios[ii], 'ratios should be equal'
+
+        # get GT present in all frames of the stack
+        all_ids = np.unique(gt_ids.numpy()).astype(int)
+        or_gt_boxes = data[2]
+        new_gt_boxes = or_gt_boxes.new().resize_as_(or_gt_boxes).zero_()
+
+        numGT = 0
+        for _id in all_ids:
+            if _id == -1:
+               continue
+            per_gt = (gt_ids == _id).int().sum(1)
+            assert not per_gt.gt(1).any(), 'gt id has to appear only once per frame'
+            in_all = per_gt.eq(1).sum() == K
+            if not in_all:
+               continue # gt ID does not appear in all frames
+            _id_boxes = (gt_ids == _id).view(K, gt_ids.shape[1], 1).repeat(1,1,5)
+            new_gt_boxes[:, numGT, :] = or_gt_boxes[_id_boxes]
+            numGT += 1
+
+        assert numGT > 0
+        data[2] = new_gt_boxes
+        data[3][:] = numGT
+
       gt_boxes.data.resize_(data[2].size()).copy_(data[2])
       num_boxes.data.resize_(data[3].size()).copy_(data[3])
 
@@ -385,27 +460,29 @@ if __name__ == '__main__':
         loss_temp = 0
         start = time.time()
 
-    if args.mGPUs:
-      save_name = os.path.join(output_dir, 'faster_rcnn_{}_{}_{}.pth'.format(args.session, epoch, step))
-      save_checkpoint({
-        'session': args.session,
-        'epoch': epoch + 1,
-        'model': fasterRCNN.module.state_dict(),
-        'optimizer': optimizer.state_dict(),
-        'pooling_mode': cfg.POOLING_MODE,
-        'class_agnostic': args.class_agnostic,
-      }, save_name)
-    else:
-      save_name = os.path.join(output_dir, 'faster_rcnn_{}_{}_{}.pth'.format(args.session, epoch, step))
-      save_checkpoint({
-        'session': args.session,
-        'epoch': epoch + 1,
-        'model': fasterRCNN.state_dict(),
-        'optimizer': optimizer.state_dict(),
-        'pooling_mode': cfg.POOLING_MODE,
-        'class_agnostic': args.class_agnostic,
-      }, save_name)
-    print('save model: {}'.format(save_name))
+      total_it = (epoch - 1) * iters_per_epoch + step + 1
+      if total_it % args.save_each_it == 0:
+        if args.mGPUs:
+          save_name = os.path.join(output_dir, 'faster_rcnn_{}_{}_{}.pth'.format(args.session, epoch, step + 1))
+          save_checkpoint({
+            'session': args.session,
+            'epoch': epoch + 1, # this is the starting epoch if reloading
+            'model': fasterRCNN.module.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'pooling_mode': cfg.POOLING_MODE,
+            'class_agnostic': args.class_agnostic,
+          }, save_name)
+        else:
+          save_name = os.path.join(output_dir, 'faster_rcnn_{}_{}_{}.pth'.format(args.session, epoch, step + 1))
+          save_checkpoint({
+            'session': args.session,
+            'epoch': epoch + 1, # this is the starting epoch if reloading
+            'model': fasterRCNN.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'pooling_mode': cfg.POOLING_MODE,
+            'class_agnostic': args.class_agnostic,
+          }, save_name)
+        print('save model: {}'.format(save_name))
 
     end = time.time()
     print(end - start)

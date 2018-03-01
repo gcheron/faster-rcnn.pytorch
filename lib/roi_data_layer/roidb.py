@@ -127,9 +127,13 @@ def combined_roidb(imdb_names, training=True):
   else:
     imdb = get_imdb(imdb_names)
 
+  prev_len = len(roidb)
   if training:
     roidb = filter_roidb(roidb)
 
   ratio_list, ratio_index = rank_roidb_ratio(roidb)
+
+  if hasattr(imdb, '_stack_index'):
+    assert prev_len == len(roidb), 'filtering affects stack order!'
 
   return imdb, roidb, ratio_list, ratio_index

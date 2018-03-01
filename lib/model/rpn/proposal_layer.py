@@ -18,8 +18,9 @@ from model.utils.config import cfg
 from .generate_anchors import generate_anchors
 from .bbox_transform import bbox_transform_inv, clip_boxes, clip_boxes_batch
 from model.nms.nms_wrapper import nms
+from linkdets.tube_utils import nms_tubelets
 
-import pdb
+import ipdb
 
 DEBUG = False
 
@@ -29,13 +30,14 @@ class _ProposalLayer(nn.Module):
     transformations to a set of regular boxes (called "anchors").
     """
 
-    def __init__(self, feat_stride, scales, ratios):
+    def __init__(self, feat_stride, scales, ratios, K=-1):
         super(_ProposalLayer, self).__init__()
 
         self._feat_stride = feat_stride
         self._anchors = torch.from_numpy(generate_anchors(scales=np.array(scales), 
             ratios=np.array(ratios))).float()
         self._num_anchors = self._anchors.size(0)
+        self.K = K
 
         # rois blob: holds R regions of interest, each is a 5-tuple
         # (n, x1, y1, x2, y2) specifying an image batch index n and a
@@ -64,8 +66,8 @@ class _ProposalLayer(nn.Module):
 
         # the first set of _num_anchors channels are bg probs
         # the second set are the fg probs
-        scores = input[0][:, self._num_anchors:, :, :]
-        bbox_deltas = input[1]
+        scores = input[0][:, self._num_anchors:, :, :] # get only fg scores, size [nBatch, nAnchors, H, W]
+        bbox_deltas = input[1] # size [nBatch, 4 x nAnchors, H, W]
         im_info = input[2]
         cfg_key = input[3]
 
@@ -82,31 +84,32 @@ class _ProposalLayer(nn.Module):
         shift_x, shift_y = np.meshgrid(shift_x, shift_y)
         shifts = torch.from_numpy(np.vstack((shift_x.ravel(), shift_y.ravel(),
                                   shift_x.ravel(), shift_y.ravel())).transpose())
-        shifts = shifts.contiguous().type_as(scores).float()
+        shifts = shifts.contiguous().type_as(scores).float() # all positions in px size [H x W, 4]
 
         A = self._num_anchors
         K = shifts.size(0)
 
+        # generate anchors (4 coordinates in pix.) at each (H, W) location
         self._anchors = self._anchors.type_as(scores)
         # anchors = self._anchors.view(1, A, 4) + shifts.view(1, K, 4).permute(1, 0, 2).contiguous()
-        anchors = self._anchors.view(1, A, 4) + shifts.view(K, 1, 4)
-        anchors = anchors.view(1, K * A, 4).expand(batch_size, K * A, 4)
+        anchors = self._anchors.view(1, A, 4) + shifts.view(K, 1, 4) # size [H x W, nAnchors, 4]
+        anchors = anchors.view(1, K * A, 4).expand(batch_size, K * A, 4) # size [nBatch, H x W x nAnchors, 4]
 
         # Transpose and reshape predicted bbox transformations to get them
         # into the same order as the anchors:
 
         bbox_deltas = bbox_deltas.permute(0, 2, 3, 1).contiguous()
-        bbox_deltas = bbox_deltas.view(batch_size, -1, 4)
+        bbox_deltas = bbox_deltas.view(batch_size, -1, 4) # size [nBatch, H x W x nAnchors, 4]
 
         # Same story for the scores:
         scores = scores.permute(0, 2, 3, 1).contiguous()
-        scores = scores.view(batch_size, -1)
+        scores = scores.view(batch_size, -1) # size [nBatch, H x W x nAnchors]
 
         # Convert anchors into proposals via bbox transformations
         proposals = bbox_transform_inv(anchors, bbox_deltas, batch_size)
 
         # 2. clip predicted boxes to image
-        proposals = clip_boxes(proposals, im_info, batch_size)
+        proposals = clip_boxes(proposals, im_info, batch_size) # size [nBatch, H x W x nAnchors, 4]
         # proposals = clip_boxes_batch(proposals, im_info, batch_size)
 
         # assign the score to 0 if it's non keep.
@@ -125,6 +128,19 @@ class _ProposalLayer(nn.Module):
         _, order = torch.sort(scores_keep, 1, True)
 
         output = scores.new(batch_size, post_nms_topN, 5).zero_()
+
+        _NMS_3D = False
+        if self.K > 1:
+            # do NMS/selection jointly for all images of the stack in order to keep corresponding proposals
+            # Note that scores are the same for all images so proposal order is the same
+            order = order[0, :].repeat(self.K, 1)
+
+            if _NMS_3D:
+               # represent tubelet with 4K+1 columns for 3D NMS computation
+               prop_concate = [ proposals_keep[k] for k in range(self.K) ]
+               prop_concate = torch.cat( prop_concate, 1)
+               prop_concate = torch.cat( (prop_concate, scores_keep[0]) , 1)
+
         for i in range(batch_size):
             # # 3. remove predicted boxes with either height or width < threshold
             # # (NOTE: convert min_size to input image scale stored in im_info[2])
@@ -145,11 +161,28 @@ class _ProposalLayer(nn.Module):
             # 7. take after_nms_topN (e.g. 300)
             # 8. return the top proposals (-> RoIs top)
 
-            keep_idx_i = nms(torch.cat((proposals_single, scores_single), 1), nms_thresh)
-            keep_idx_i = keep_idx_i.long().view(-1)
+            if self.K > 1:
+               # compute NMS once and keep the same selected ID
+               if i == 0:
+                  if _NMS_3D:
+                     # compute 3D (this is slow...)
+                     prop_concate = prop_concate[order_single].cpu().numpy()
+                     keep_idx_i = nms_tubelets(prop_concate, overlapThresh=nms_thresh, top_k=post_nms_topN)
+                  else:
+                     # do NMS on the middle frame
+                     _midd = self.K/2
+                     prop_midd = proposals_keep[_midd][order_single, :]
+                     score_midd = scores_keep[_midd][order_single]
+                     keep_idx_i = nms(torch.cat((prop_midd, score_midd), 1), nms_thresh)
+                     keep_idx_i = keep_idx_i.long().view(-1)
+                  if post_nms_topN > 0:
+                      keep_idx_i = keep_idx_i[:post_nms_topN]
+            else:
+               keep_idx_i = nms(torch.cat((proposals_single, scores_single), 1), nms_thresh)
+               keep_idx_i = keep_idx_i.long().view(-1)
+               if post_nms_topN > 0:
+                   keep_idx_i = keep_idx_i[:post_nms_topN]
 
-            if post_nms_topN > 0:
-                keep_idx_i = keep_idx_i[:post_nms_topN]
             proposals_single = proposals_single[keep_idx_i, :]
             scores_single = scores_single[keep_idx_i, :]
 
