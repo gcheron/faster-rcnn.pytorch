@@ -98,6 +98,10 @@ def parse_args():
   parser.add_argument('--vis', dest='vis',
                       help='visualization mode',
                       action='store_true')
+  parser.add_argument('--stack_inputs', dest='stack_inputs',
+                      help='stack the <bs> inputs for prediction',
+                      action='store_true')
+
   args = parser.parse_args()
   return args
 
@@ -141,6 +145,12 @@ if __name__ == '__main__':
       args.set_cfgs = ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
 
   args.cfg_file = "cfgs/{}_ls.yml".format(args.net) if args.large_scale else "cfgs/{}.yml".format(args.net)
+
+  K = -1
+  if args.stack_inputs:
+    K = args.batch_size
+    args.imdbval_name += '_K%d' % K
+
 
   if args.cfg_file is not None:
     cfg_from_file(args.cfg_file)

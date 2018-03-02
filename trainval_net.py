@@ -5,6 +5,7 @@
 # --------------------------------------------------------
 # commands:
 # ipython trainval_net.py -- --dataset daly --net res101 --cuda --feat rgb | tee log_train_rgb_DALY.txt
+# ipython trainval_net.py -- --dataset daly --net res101 --cuda --feat rgb --bs 5 --stack_input --save_each_it 50000
 
 from __future__ import absolute_import
 from __future__ import division
