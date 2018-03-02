@@ -21,12 +21,18 @@ import json
 import uuid
 import ipdb
 import re
+import datasets.track_utils
 
 class stackedimdb(imdb):
   def __init__(self, dfilename, vidlistpath, image_set):
     imdb.__init__(self, dfilename, classes=self._classes)
 
     assert self.dname == "ucf101" or self.dname == "daly"
+
+    if self.dname == "daly":
+      self.onkeyframes = True
+    else:
+      self.onkeyframes = False
 
     with open(vidlistpath) as f:
       vcontent = f.readlines()
@@ -71,7 +77,9 @@ class stackedimdb(imdb):
     heights = self._heights
     
     idx = 0
-    gt_id = 0 # id use to recognize linked GT along time (same GT in a given image stack)
+    unique_gt_id = 0 # id use to recognize linked GT along time (same GT in a given image stack)
+    count_good = 0
+    count_bad = 0
     for vid in self.vidlist: # for all videos from the split
       vid_gt = gtfile[vid]
       if 'WH_size' in vid_gt:
@@ -79,6 +87,8 @@ class stackedimdb(imdb):
         height = vid_gt['WH_size'][1]
       else:
         # default UCF101 size
+        if self.dname == "daly":
+           raise AssertionError
         width = 320
         height = 240
 
@@ -87,16 +97,69 @@ class stackedimdb(imdb):
       # get all instance frame spanning
       inst_span = []
       for inst in vid_gt['gts']: # for all video GT instances
-        tbound = inst['tbound']
-        inst_span.append(tbound)
-      
+        if self.onkeyframes:
+           tbounds = []
+           for key in inst['keyframes']['keylist']:
+              fn = key['frame_num']
+              tbound = (fn, fn)
+              if K > 1: # get the tracked boxes around the GT instead of the GT annotation
+                  # get the GT correspondance in the tracked shot
+                  _, gt_i, gbox = datasets.track_utils.framebounds2idx(inst, tbound)
+                  max_pix_diff = np.abs(key['boxes'] - gbox).max()
+                  max_pix_diff /= float(width*height)/(320*240) # normalize compared to the standard image size
+                  if max_pix_diff > 20:
+                     #print(datasets.track_utils.framebounds2idx(inst, (fn -3, fn+3)))
+                     #print(key['boxes'])
+                     #print(max_pix_diff)
+                     count_bad += 1
+                  else:
+                     count_good += 1
+
+                     _idx = []
+                     f_bf_gt = gt_i
+                     f_af_gt = inst['N_frames'] - gt_i - 1
+                     need_bf = int(K/2 - 1 if K % 2 == 0 else K/2)
+                     need_af = int(K/2)
+
+                     diff_bf = f_bf_gt - need_bf
+                     diff_af = f_af_gt - need_af
+
+                     if diff_bf >= 0 and diff_af >= 0:
+                        # just add tracked frames around the GT
+                        tbound = (fn - need_bf, fn + need_af)
+
+                     elif diff_bf + diff_af >= 0:
+                        # we have enough frames close to the GT
+                        if diff_bf < 0:
+                           t1 = fn - f_bf_gt # take all frames before
+                           t2 = t1 + K - 1 # complete
+
+                        else: # diff_af < 0
+                           t2 = fn + f_af_gt # take all frames after
+                           t1 = t2 - K + 1 # complete
+
+                        tbound = (t1, t2)
+
+                     # OTHERWISE: tbound remains unchanged (keyframe only), it will not be consider later
+              tbounds.append( (tbound, unique_gt_id) )
+              unique_gt_id += 1
+        else:
+           tbound = inst['tbound']
+           tbounds = [ (tbound, unique_gt_id) ]
+           unique_gt_id += 1
+        inst_span.append( tbounds )
+
       last_stack = {}
       for f in range(vlen):
         fn = f + 1 # frame number
         add_inst = []
         new_stack = False
         _append = False
-        for inst_idx, tbound in enumerate(inst_span):
+        for inst_idx, tbounds in enumerate(inst_span): # for each gt instance
+         # Note that if not self.onkeyframes, the following loop has a single element: the gt instance
+         for key_idx, t_uniq in enumerate(tbounds):
+          # for each "instance" or "keyframe of the gt instance"
+          tbound, unique_gt_id = t_uniq
           if (fn >= tbound[0]) and (fn <= tbound[1]): # if the frame is inside the gt bound, add the gt instance
             if K > 1: # check the K-1 next GT
                if fn + K - 1 <= tbound[1]: # we can start a new stack from here
@@ -115,7 +178,10 @@ class stackedimdb(imdb):
               _append = True # if K == 1, append the frame is inside the gt bound
 
             if _append:
-              add_inst.append(inst_idx)
+              if self.onkeyframes:
+                 add_inst.append( (inst_idx, unique_gt_id, key_idx) )
+              else:
+                 add_inst.append( (inst_idx, unique_gt_id) )
 
         if add_inst or self.on_all_samples: # if the frame contains any gt or if we use all frames
           image_idx.append(idx)
@@ -123,7 +189,7 @@ class stackedimdb(imdb):
             # this position in image_idx is a new stack
             self._stack_index.append(len(image_idx)-1)
 
-          self._idx_2_gtinstance[idx] = (vid, add_inst, fn, gt_id)
+          self._idx_2_gtinstance[idx] = (vid, add_inst, fn)
           widths[idx] = width
           heights[idx] = height
           # get the image path (the full path with be added in image_path_from_index)
@@ -131,22 +197,38 @@ class stackedimdb(imdb):
           idx += 1
 
       assert len(last_stack) == 0, 'any started stack has to be finished'
-      gt_id += len(vid_gt['gts']) # all GT have a unique ID
+
+    if self.onkeyframes and K > 1:
+       print('We kept %d GT and filtered %d' % (count_good, count_bad) )
 
   def idx2gtinstance(self, idx, gtfile):
-    vid, inst_indices, fn, glob_gt_id = self._idx_2_gtinstance[idx]
+    vid, inst_indices, fn = self._idx_2_gtinstance[idx]
 
     gtboxes = []
     classes = []
-    gtids = [] # unique GT ids given the glob_gt_id of the video
-    for i in inst_indices:
+    gtids = [] # unique GT ids given the unique_gt_id of the video
+    for ii in inst_indices:
+      if self.onkeyframes:
+         i, unique_gt_id, i_key = ii
+      else:
+         i, unique_gt_id = ii
+
       inst = gtfile[vid]['gts'][i]
-      f_start = inst['tbound'][0] # gt starting frame
-      box_id = fn - f_start
-      assert box_id >= 0
-      gtboxes.append(inst['boxes'][box_id, :])
+
+      if self.onkeyframes and self.K <= 1:
+         keyframe = inst['keyframes']['keylist'][i_key]
+         assert keyframe['boxes'].ndim == 1, "we expect only one box"
+         box = keyframe['boxes']
+
+      else:
+         f_start = inst['tbound'][0] # gt starting frame
+         box_id = fn - f_start
+         assert box_id >= 0
+         box = inst['boxes'][box_id, :]
+
+      gtboxes.append(box)
       classes.append(inst['label']) # in annotation: starts at one with bkg is last class, so class idx is correct
-      gtids.append(i + glob_gt_id)
+      gtids.append(unique_gt_id)
 
     return gtboxes, classes, gtids
 
@@ -187,7 +269,7 @@ class stackedimdb(imdb):
       return roidb
 
     gtfile = self.loadgtfile()
-    gt_roidb = [self._load_ucf101_annotation(index, gtfile)
+    gt_roidb = [self._load_stacked_annotation(index, gtfile)
                 for index in self._image_index]
 
     with open(cache_file, 'wb') as fid:
@@ -195,9 +277,9 @@ class stackedimdb(imdb):
     print('wrote gt roidb to {}'.format(cache_file))
     return gt_roidb
 
-  def _load_ucf101_annotation(self, index, gtfile):
+  def _load_stacked_annotation(self, index, gtfile):
     """
-    Loads UCF101 bounding-box instance annotations.
+    Loads bounding-box instance annotations.
     """
     gtboxes, classes, gtids = self.idx2gtinstance(index, gtfile)
     width = self._widths[index]

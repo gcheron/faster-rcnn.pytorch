@@ -17,7 +17,7 @@ from model.rpn.bbox_transform import bbox_transform_inv, clip_boxes
 import numpy as np
 import random
 import time
-import pdb
+import ipdb
 
 class roibatchLoader(data.Dataset):
   def __init__(self, roidb, ratio_list, ratio_index, batch_size, num_classes, training=True, normalize=None, stack_inputs=False):
@@ -41,8 +41,7 @@ class roibatchLoader(data.Dataset):
 
     if self.stack_inputs: # all stack images have the same ratio...
       self.ratio_index = -1 # this should not be use anymore
-      for i in range(self.data_size):
-        self.ratio_list_batch[i] = ratio_list[i]
+      self.ratio_list_batch = -1
       return
 
     for i in range(num_batch):
@@ -101,7 +100,12 @@ class roibatchLoader(data.Dataset):
         # get the index range
 
         # if the image need to crop, crop to the target size.
-        ratio = self.ratio_list_batch[index]
+        if self.stack_inputs:
+           # all images of the stack have the same ratio...
+           ratio = minibatch_db[0]['width'] / float(minibatch_db[0]['height'])
+           self._roidb[index_ratio]['need_crop'] = 0
+        else:
+           ratio = self.ratio_list_batch[index]
 
         if self._roidb[index_ratio]['need_crop']:
             if ratio < 1:

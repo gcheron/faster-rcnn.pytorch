@@ -54,7 +54,3 @@ class ucf101(stackedimdb):
       vidlistpath = datasetroot + '/detection/OF_vidlist_test1.txt'
 
     stackedimdb.__init__(self, dfilename, vidlistpath, image_set)
-
-  def loadgtfile(self):
-    with open(self.gtpath) as f:
-      return pickle.load(f)
