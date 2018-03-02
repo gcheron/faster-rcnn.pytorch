@@ -255,7 +255,6 @@ if __name__ == '__main__':
     output_dir += "_K%d" % args.batch_size
     assert len(cfg.TRAIN.SCALES) == 1
 
-  output_dir += "/" + args.dataset + "_" + args.feature
   if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 

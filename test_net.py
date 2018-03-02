@@ -5,6 +5,7 @@
 # --------------------------------------------------------
 # command:
 # ipython test_net.py -- --dataset ucf101 --testset trainall --net res101 --cuda --feat rgb --checkepoch 2 --checkpoint 680671
+# ipython test_net.py -- --dataset ucf101 --testset trainall --net res101 --cuda --feat rgb --checkepoch 1 --checkpoint 200000 --bs 5 --stack_input --set TEST.RPN_POST_NMS_TOP_N 200
 
 from __future__ import absolute_import
 from __future__ import division
@@ -56,7 +57,7 @@ def parse_args():
                       help='vgg16, res50, res101, res152',
                       default='res101', type=str)
   parser.add_argument('--set', dest='set_cfgs',
-                      help='set config keys', default=None,
+                      help='set config keys', default=[],
                       nargs=argparse.REMAINDER)
   parser.add_argument('--load_dir', dest='load_dir',
                       help='directory to load models', default="./data/netdir",
@@ -122,26 +123,26 @@ if __name__ == '__main__':
   if args.dataset == "pascal_voc":
       args.imdb_name = "voc_2007_trainval"
       args.imdbval_name = "voc_2007_test"
-      args.set_cfgs = ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]']
+      args.set_cfgs += ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]']
   elif args.dataset == "pascal_voc_0712":
       args.imdb_name = "voc_2007_trainval+voc_2012_trainval"
       args.imdbval_name = "voc_2007_test"
-      args.set_cfgs = ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]']
+      args.set_cfgs += ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]']
   elif args.dataset == "coco":
       args.imdb_name = "coco_2014_train+coco_2014_valminusminival"
       args.imdbval_name = "coco_2014_minival"
-      args.set_cfgs = ['ANCHOR_SCALES', '[4, 8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]']
+      args.set_cfgs += ['ANCHOR_SCALES', '[4, 8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]']
   elif args.dataset == "imagenet":
       args.imdb_name = "imagenet_train"
       args.imdbval_name = "imagenet_val"
-      args.set_cfgs = ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]']
+      args.set_cfgs += ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]']
   elif args.dataset == "vg":
       args.imdb_name = "vg_150-50-50_minitrain"
       args.imdbval_name = "vg_150-50-50_minival"
-      args.set_cfgs = ['ANCHOR_SCALES', '[4, 8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]']
+      args.set_cfgs += ['ANCHOR_SCALES', '[4, 8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]']
   elif args.dataset == "ucf101":
       args.imdbval_name = "ucf101_" + args.testset + "_" + args.feature
-      args.set_cfgs = ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
+      args.set_cfgs += ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
 
   args.cfg_file = "cfgs/{}_ls.yml".format(args.net) if args.large_scale else "cfgs/{}.yml".format(args.net)
 
@@ -234,7 +235,7 @@ if __name__ == '__main__':
 
   save_name = 'faster_rcnn_10'
   if args.stack_inputs:
-   num_images = len(imdb._all_stack_index) * args.batch_size
+   num_images = len(imdb._all_stack_index)
 
    # define the stack sample
    class sampler(Sampler):
@@ -259,7 +260,7 @@ if __name__ == '__main__':
      def __len__(self):
        return self.num_data
 
-   sampler_batch = sampler(num_images, args.batch_size, imdb)
+   sampler_batch = sampler(len(imdb._all_stack_index) * args.batch_size, args.batch_size, imdb)
    dataloader_args = {'sampler': sampler_batch, 'num_workers': 0, 'pin_memory': True, 'batch_size': args.batch_size}
 
   else:
@@ -307,11 +308,11 @@ if __name__ == '__main__':
             if args.class_agnostic:
                 box_deltas = box_deltas.view(-1, 4) * torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_STDS).cuda() \
                            + torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS).cuda()
-                box_deltas = box_deltas.view(1, -1, 4)
+                box_deltas = box_deltas.view(args.batch_size, -1, 4)
             else:
                 box_deltas = box_deltas.view(-1, 4) * torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_STDS).cuda() \
                            + torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS).cuda()
-                box_deltas = box_deltas.view(1, -1, 4 * len(imdb.classes))
+                box_deltas = box_deltas.view(args.batch_size, -1, 4 * len(imdb.classes))
 
           pred_boxes = bbox_transform_inv(boxes, box_deltas, 1)
           pred_boxes = clip_boxes(pred_boxes, im_info.data, 1)
@@ -320,6 +321,10 @@ if __name__ == '__main__':
           pred_boxes = np.tile(boxes, (1, scores.shape[1]))
 
       pred_boxes /= data[1][0][2]
+
+      if args.stack_inputs:
+         scores = scores[0, :, :] # all image stack scores are equal, select one
+         save_pred = pred_boxes.clone()
 
       scores = scores.squeeze()
       pred_boxes = pred_boxes.squeeze()
@@ -335,15 +340,39 @@ if __name__ == '__main__':
           if inds.numel() > 0:
             cls_scores = scores[:,j][inds]
             _, order = torch.sort(cls_scores, 0, True)
-            if args.class_agnostic:
-              cls_boxes = pred_boxes[inds, :]
-            else:
-              cls_boxes = pred_boxes[inds][:, j * 4:(j + 1) * 4]
 
-            cls_dets = torch.cat((cls_boxes, cls_scores[:, None]), 1)
-            cls_dets = cls_dets[order]
-            keep = nms(cls_dets, cfg.TEST.NMS)
+            if args.stack_inputs:
+               # NMS independently on all frames
+               n_loop = args.batch_size
+               all_keep = []
+               all_cls_boxes = []
+            else:
+               n_loop = 1
+
+            for i_nms in range(n_loop):
+               if args.stack_inputs:
+                  pred_boxes = save_pred[i_nms]
+
+               if args.class_agnostic:
+                 cls_boxes = pred_boxes[inds, :]
+               else:
+                 cls_boxes = pred_boxes[inds][:, j * 4:(j + 1) * 4]
+
+               cls_dets = torch.cat((cls_boxes, cls_scores[:, None]), 1)
+               cls_dets = cls_dets[order]
+               keep = nms(cls_dets, cfg.TEST.NMS)
+
+               if args.stack_inputs:
+                  all_keep.append(keep)
+                  all_cls_boxes.append(cls_boxes)
+
+            if args.stack_inputs:
+               keep = torch.from_numpy(np.unique(torch.cat(all_keep, 0).cpu().numpy())).cuda()
+               cls_dets = torch.cat(all_cls_boxes, 1)
+               cls_dets = torch.cat((cls_dets, cls_scores[:, None]), 1)[order]
+
             cls_dets = cls_dets[keep.view(-1).long()]
+
             if vis:
               im2show = vis_detections(im2show, imdb.classes[j], cls_dets.cpu().numpy(), 0.3)
             all_boxes[j][i] = cls_dets.cpu().numpy()
