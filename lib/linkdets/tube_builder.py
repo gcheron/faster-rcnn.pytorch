@@ -271,8 +271,12 @@ class tube_builder():
             pickle.dump(res, f)
 
 if __name__ == '__main__':
-   tb = tube_builder('../../output/res101/ucf101_rgb_valall/faster_rcnn_10/detections.pkl',
-                     '../../output/res101/ucf101_rgb_valall/faster_rcnn_10/tubes',
-                     24,
-                     1)
+   #dset = 'ucf101_rgb_valall'
+   dset = 'ucf101_rgb_trainall'
+   nclasses = 24
+   K = 1
+   tb = tube_builder('../../output/res101/%s/faster_rcnn_10/detections.pkl' % dset,
+                     '../../output/res101/%s/faster_rcnn_10/tubes' % dset,
+                     nclasses,
+                     K)
    tb.build_tubes()

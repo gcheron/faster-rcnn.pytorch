@@ -172,7 +172,7 @@ class _ProposalLayer(nn.Module):
                      # do NMS on the middle frame
                      _midd = self.K/2
                      prop_midd = proposals_keep[_midd][order_single, :]
-                     score_midd = scores_keep[_midd][order_single]
+                     score_midd = scores_keep[_midd][order_single].view(-1,1)
                      keep_idx_i = nms(torch.cat((prop_midd, score_midd), 1), nms_thresh)
                      keep_idx_i = keep_idx_i.long().view(-1)
                   if post_nms_topN > 0:

@@ -54,3 +54,10 @@ class ucf101(stackedimdb):
       vidlistpath = datasetroot + '/detection/OF_vidlist_test1.txt'
 
     stackedimdb.__init__(self, dfilename, vidlistpath, image_set)
+
+  def getShots(self):
+      self.vid_shot_ends = {}
+      gtfile = self.loadgtfile()
+      for vid in self.vidlist:
+         # in UCF101, there is only one shot per video, so append the video length
+         self.vid_shot_ends[vid] = [ gtfile[vid]['length'] ]

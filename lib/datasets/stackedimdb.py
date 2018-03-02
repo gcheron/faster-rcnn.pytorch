@@ -44,6 +44,7 @@ class stackedimdb(imdb):
 
     self._class_to_ind = dict(list(zip(self.classes, list(range(self.num_classes)))))
 
+    self.getShots()
     self._load_image_set_index()
     # Default to roidb handler
     self._roidb_handler = self.gt_roidb
@@ -60,7 +61,6 @@ class stackedimdb(imdb):
     gtfile = self.loadgtfile()
 
     self._image_index = []
-
     # dicts taking index from self._image_index as input key
     self._image_path = {}
     self._widths = {}
@@ -70,6 +70,9 @@ class stackedimdb(imdb):
     K = self.K
     if K > 1:
       self._stack_index = [] # these indices point to the begining of each stack
+      if self.on_all_samples:
+         self._all_stack_index = []
+
 
     image_idx = self._image_index
     image_path = self._image_path
@@ -80,7 +83,12 @@ class stackedimdb(imdb):
     unique_gt_id = 0 # id use to recognize linked GT along time (same GT in a given image stack)
     count_good = 0
     count_bad = 0
+    iii = 0
+    DEBUG = False
     for vid in self.vidlist: # for all videos from the split
+      if iii > 5 and DEBUG:
+         break
+      iii += 1
       vid_gt = gtfile[vid]
       if 'WH_size' in vid_gt:
         width = vid_gt['WH_size'][0]
@@ -150,8 +158,15 @@ class stackedimdb(imdb):
         inst_span.append( tbounds )
 
       last_stack = {}
+      next_shot_end = -1
+      shot_id = -1
       for f in range(vlen):
         fn = f + 1 # frame number
+        if self.on_all_samples and K > 1 and fn > next_shot_end:
+         shot_id += 1
+         next_shot_end = self.vid_shot_ends[vid][shot_id]
+         assert fn <= next_shot_end
+
         add_inst = []
         new_stack = False
         _append = False
@@ -188,6 +203,10 @@ class stackedimdb(imdb):
           if new_stack:
             # this position in image_idx is a new stack
             self._stack_index.append(len(image_idx)-1)
+
+          if K > 1 and self.on_all_samples and fn + K - 1 <= next_shot_end:
+            # we can start a test stack from here
+            self._all_stack_index.append(len(image_idx)-1)
 
           self._idx_2_gtinstance[idx] = (vid, add_inst, fn)
           widths[idx] = width

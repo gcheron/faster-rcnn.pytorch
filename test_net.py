@@ -16,13 +16,14 @@ import sys
 import numpy as np
 import argparse
 import pprint
-import pdb
+import ipdb
 import time
 import cv2
 import torch
 from torch.autograd import Variable
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils.data.sampler import Sampler
 import pickle
 from roi_data_layer.roidb import combined_roidb
 from roi_data_layer.roibatchLoader import roibatchLoader
@@ -33,8 +34,6 @@ from model.rpn.bbox_transform import bbox_transform_inv
 from model.utils.net_utils import save_net, load_net, vis_detections
 from model.faster_rcnn.vgg16 import vgg16
 from model.faster_rcnn.resnet import resnet
-
-import pdb
 
 try:
     xrange          # Python 2
@@ -167,6 +166,9 @@ if __name__ == '__main__':
   print('{:d} roidb entries'.format(len(roidb)))
 
   input_dir = args.load_dir + "/" + args.net + "/" + args.dataset + "_" + args.feature
+  if args.stack_inputs:
+      input_dir += '_K%d' % K
+
   if not os.path.exists(input_dir):
     raise Exception('There is no input directory for loading network from ' + input_dir)
   load_name = os.path.join(input_dir,
@@ -174,16 +176,16 @@ if __name__ == '__main__':
 
   # initilize the network here.
   if args.net == 'vgg16':
-    fasterRCNN = vgg16(imdb.classes, pretrained=False, class_agnostic=args.class_agnostic)
+    fasterRCNN = vgg16(imdb.classes, pretrained=False, class_agnostic=args.class_agnostic, K=K)
   elif args.net == 'res101':
-    fasterRCNN = resnet(imdb.classes, 101, pretrained=False, class_agnostic=args.class_agnostic)
+    fasterRCNN = resnet(imdb.classes, 101, pretrained=False, class_agnostic=args.class_agnostic, K=K)
   elif args.net == 'res50':
-    fasterRCNN = resnet(imdb.classes, 50, pretrained=False, class_agnostic=args.class_agnostic)
+    fasterRCNN = resnet(imdb.classes, 50, pretrained=False, class_agnostic=args.class_agnostic, K=K)
   elif args.net == 'res152':
-    fasterRCNN = resnet(imdb.classes, 152, pretrained=False, class_agnostic=args.class_agnostic)
+    fasterRCNN = resnet(imdb.classes, 152, pretrained=False, class_agnostic=args.class_agnostic, K=K)
   else:
     print("network is not defined")
-    pdb.set_trace()
+    ipdb.set_trace()
 
   fasterRCNN.create_architecture()
 
@@ -231,16 +233,46 @@ if __name__ == '__main__':
     thresh = 0.0
 
   save_name = 'faster_rcnn_10'
-  num_images = len(imdb.image_index)
+  if args.stack_inputs:
+   num_images = len(imdb._all_stack_index) * args.batch_size
+
+   # define the stack sample
+   class sampler(Sampler):
+     def __init__(self, data_size, batch_size, imdb):
+       self.num_data = data_size
+       self.num_batch = int(data_size / batch_size)
+       self.batch_size = batch_size
+       self.range = torch.arange(0,batch_size).view(1, batch_size).long()
+       self.stack_index = imdb._all_stack_index
+       if data_size % batch_size:
+         raise AssertionError
+
+     def __iter__(self):
+       # we loop on stack indices, that are equaly spaced by <bs>
+       # in order to point at the begining of the stacks
+       _num = torch.LongTensor(self.stack_index).view(-1, 1)
+       self._num = _num.expand(self.num_batch, self.batch_size) + self.range
+       self._num_view = self._num.view(-1)
+
+       return iter(self._num_view)
+
+     def __len__(self):
+       return self.num_data
+
+   sampler_batch = sampler(num_images, args.batch_size, imdb)
+   dataloader_args = {'sampler': sampler_batch, 'num_workers': 0, 'pin_memory': True, 'batch_size': args.batch_size}
+
+  else:
+   num_images = len(imdb.image_index)
+   dataloader_args = {'batch_size': args.batch_size, 'shuffle': False, 'num_workers': 0, 'pin_memory': True}
+
   all_boxes = [[[] for _ in xrange(num_images)]
                for _ in xrange(imdb.num_classes + 1)] # last position is impath
 
   output_dir = get_output_dir(imdb, save_name)
   dataset = roibatchLoader(roidb, ratio_list, ratio_index, args.batch_size, \
                         imdb.num_classes, training=False, normalize = False)
-  dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size,
-                            shuffle=False, num_workers=0,
-                            pin_memory=True)
+  dataloader = torch.utils.data.DataLoader(dataset, **dataloader_args)
 
   data_iter = iter(dataloader)
 
@@ -339,7 +371,7 @@ if __name__ == '__main__':
 
       if vis:
           cv2.imwrite('result.png', im2show)
-          pdb.set_trace()
+          ipdb.set_trace()
           #cv2.imshow('test', im2show)
           #cv2.waitKey(0)
 

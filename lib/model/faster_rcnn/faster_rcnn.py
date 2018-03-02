@@ -44,7 +44,7 @@ class _fasterRCNN(nn.Module):
         gt_boxes = gt_boxes.data
         num_boxes = num_boxes.data
 
-        if self.K > 1:
+        if self.K > 1 and self.training:
             # check we have the same GT num for all images of the stack
             _cmp = torch.nonzero( (gt_boxes[0] !=0).sum(1) ).numel()
             for k in range(self.K-1):
