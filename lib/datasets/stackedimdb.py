@@ -41,10 +41,10 @@ class stackedimdb(imdb):
     self.on_all_samples = False
     if image_set == 'valall' or image_set == 'trainall':
       self.on_all_samples = True # detect on all video frames
+      self.getShots()
 
     self._class_to_ind = dict(list(zip(self.classes, list(range(self.num_classes)))))
 
-    self.getShots()
     self._load_image_set_index()
     # Default to roidb handler
     self._roidb_handler = self.gt_roidb

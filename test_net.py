@@ -35,6 +35,7 @@ from model.rpn.bbox_transform import bbox_transform_inv
 from model.utils.net_utils import save_net, load_net, vis_detections
 from model.faster_rcnn.vgg16 import vgg16
 from model.faster_rcnn.resnet import resnet
+import re
 
 try:
     xrange          # Python 2
@@ -267,8 +268,10 @@ if __name__ == '__main__':
    num_images = len(imdb.image_index)
    dataloader_args = {'batch_size': args.batch_size, 'shuffle': False, 'num_workers': 0, 'pin_memory': True}
 
-  all_boxes = [[[] for _ in xrange(num_images)]
-               for _ in xrange(imdb.num_classes + 1)] # last position is impath
+  PER_VIDEO_SAVING = True
+  if not PER_VIDEO_SAVING:
+     all_boxes = [[[] for _ in xrange(num_images)]
+                  for _ in xrange(imdb.num_classes + 1)] # last position is impath
 
   output_dir = get_output_dir(imdb, save_name)
   dataset = roibatchLoader(roidb, ratio_list, ratio_index, args.batch_size, \
@@ -279,9 +282,12 @@ if __name__ == '__main__':
 
   _t = {'im_detect': time.time(), 'misc': time.time()}
   det_file = os.path.join(output_dir, 'detections.pkl')
+  if not PER_VIDEO_SAVING:
+   det_file_vid = det_file
 
   fasterRCNN.eval()
   empty_array = np.transpose(np.array([[],[],[],[],[]]), (1,0))
+  previous_boxes = []
   for i in range(num_images):
 
       data = next(data_iter)
@@ -299,7 +305,7 @@ if __name__ == '__main__':
 
       scores = cls_prob.data
       boxes = rois.data[:, :, 1:5]
-
+      vid_boxes = [[] for _ in xrange(imdb.num_classes + 1)] # last position is impath
       if cfg.TEST.BBOX_REG:
           # Apply bounding-box regression deltas
           box_deltas = bbox_pred.data
@@ -375,21 +381,37 @@ if __name__ == '__main__':
 
             if vis:
               im2show = vis_detections(im2show, imdb.classes[j], cls_dets.cpu().numpy(), 0.3)
-            all_boxes[j][i] = cls_dets.cpu().numpy()
+            vid_boxes[j] = cls_dets.cpu().numpy()
           else:
-            all_boxes[j][i] = empty_array
+            vid_boxes[j] = empty_array
 
       # Limit to max_per_image detections *over all classes*
       if max_per_image > 0:
-          image_scores = np.hstack([all_boxes[j][i][:, -1]
+          image_scores = np.hstack([vid_boxes[j][:, -1]
                                     for j in xrange(1, imdb.num_classes)])
           if len(image_scores) > max_per_image:
               image_thresh = np.sort(image_scores)[-max_per_image]
               for j in xrange(1, imdb.num_classes):
-                  keep = np.where(all_boxes[j][i][:, -1] >= image_thresh)[0]
-                  all_boxes[j][i] = all_boxes[j][i][keep, :]
+                  keep = np.where(vid_boxes[j][:, -1] >= image_thresh)[0]
+                  vid_boxes[j] = vid_boxes[j][keep, :]
 
-      all_boxes[-1][i] = impath
+      vid_boxes[-1] = impath
+      if PER_VIDEO_SAVING:
+         vidname = re.match('.*/([^/]*)/[^/]*.jpg', impath[0]).group(1)
+         if i > 0 and previous_vid != vidname:
+            # we reached a new video
+            assert not os.path.exists(det_file_vid),'outfile %s already exists!' % (det_file_vid)
+            with open(det_file_vid, 'wb') as f:
+               pickle.dump(previous_boxes, f, pickle.HIGHEST_PROTOCOL)
+            previous_boxes = []
+
+         # append boxes of the current video
+         previous_boxes.append(vid_boxes)
+         previous_vid = vidname
+         det_file_vid = '%s/%s.pkl' % (output_dir, vidname)
+      else:
+         for j in xrange(imdb.num_classes + 1):
+            all_boxes[j][i] = vid_boxes[j]
 
       misc_toc = time.time()
       nms_time = misc_toc - misc_tic
@@ -404,11 +426,14 @@ if __name__ == '__main__':
           #cv2.imshow('test', im2show)
           #cv2.waitKey(0)
 
-  with open(det_file, 'wb') as f:
+  # save all videos or the last video if PER_VIDEO_SAVING
+  if PER_VIDEO_SAVING:
+   all_boxes = previous_boxes
+   assert not os.path.exists(det_file_vid),'outfile %s already exists!' % (det_file_vid)
+  with open(det_file_vid, 'wb') as f:
       pickle.dump(all_boxes, f, pickle.HIGHEST_PROTOCOL)
+  end = time.time()
+  print("test time: %0.4fs" % (end - start))
 
   print('Evaluating detections')
   imdb.evaluate_detections(all_boxes, output_dir)
-
-  end = time.time()
-  print("test time: %0.4fs" % (end - start))
