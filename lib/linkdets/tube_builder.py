@@ -4,10 +4,10 @@ import ipdb
 import re
 from tube_utils import iou2d
 import os
+import glob
 
 class tube_builder():
-   def __init__(self, detfile, resdir, nclasses, K):
-      self.detfile = detfile
+   def __init__(self, detpath, resdir, nclasses, K, per_video_dets=True):
       self.resdir = resdir
       self.nclasses = nclasses
       self.K = K
@@ -17,10 +17,17 @@ class tube_builder():
       self.offset_end = 5 # frame number without merging tubelet after which a tube ends
       self.min_tube_score = 0.01 # min score to keep the final tube
       self.min_tube_length = 15 # min length to keep the final tube
+      self.per_video_dets = per_video_dets # we have one detection file per video
 
-      with open(self.detfile) as f:
-         self.detections = pickle.load(f)
-      assert len(self.detections) == self.nclasses + 2 # bkg + detpath
+      if self.per_video_dets:
+         self.detdir = detpath
+         self.vidlist = glob.glob(self.detdir + '/*')
+         print 'found %d videos' % len(self.vidlist)
+      else:
+         self.detfile = detpath
+         with open(self.detfile) as f:
+            self.detections = pickle.load(f)
+         assert len(self.detections) == self.nclasses + 2 # bkg + detpath
 
       if not os.path.exists(resdir):
          os.makedirs(resdir)
@@ -122,33 +129,57 @@ class tube_builder():
       K = self.K
       tubescore = self.tubescore
 
+      if self.per_video_dets:
+         num_dets = len(self.vidlist)
+      else:
+         num_dets = len(self.detections[0])
       # split detections per video
       prev_vid = ''
-      num_dets = len(self.detections[0])
+      cur_im = -1
       video_dets = {}
       for i_det in xrange(num_dets):
-         cur_vid = self.detections[-1][i_det]
-         assert len(cur_vid) == 1
-         rres = re.match('.*/([^/]*)/image-([0-9]*)\.*',cur_vid[0])
-         cur_vid, cur_im = rres.group(1), int(rres.group(2))
+         if self.per_video_dets:
+            cur_vid = self.vidlist[i_det]
+            cur_vid = re.match('.*/([^/]*).pkl',cur_vid).group(1)
+         else:
+            cur_vid = self.detections[-1][i_det]
+            assert len(cur_vid) == 1
+            rres = re.match('.*/([^/]*)/image-([0-9]*)\.*',cur_vid[0])
+            cur_vid, cur_im = rres.group(1), int(rres.group(2))
 
-         if cur_vid != prev_vid:
+         if self.per_video_dets or cur_vid != prev_vid:
             assert not cur_vid in video_dets
             video_dets[cur_vid] = [[] for _ in xrange(self.nclasses)]
-            assert cur_im == 1
+            if not self.per_video_dets:
+               assert cur_im == 1
          else:
             assert cur_im == prev_im + 1
 
          for c in xrange(self.nclasses):
-            cdets = self.detections[c+1][i_det] # skip bkg
-            video_dets[cur_vid][c].append(cdets)
+            if self.per_video_dets:
+               video_dets[cur_vid][0] = self.vidlist[i_det]
+            else:
+               cdets = self.detections[c+1][i_det] # skip bkg
+               video_dets[cur_vid][c].append(cdets)
 
          prev_vid = cur_vid
          prev_im = cur_im
 
       # link tubelets into tubes
       for i_v, vid in enumerate(video_dets):
-         vdets = video_dets[vid]
+         if self.per_video_dets:
+            with open(video_dets[vid][0]) as f:
+               vdets = pickle.load(f)
+            assert len(vdets[0]) == self.nclasses + 2 # bkg + detpath
+            # reorder: nclass x dets
+            _tmp = []
+            for c in xrange(self.nclasses):
+               # skip bkg
+               _tmp.append( [ vdets[f][c+1] for f in range(len(vdets)) ] )
+            vdets = _tmp
+         else:
+            vdets = video_dets[vid]
+
          outfile = '%s/%s.pkl' % (self.resdir, vid)
          nframes = len(vdets[0]) 
 
@@ -160,7 +191,7 @@ class tube_builder():
             finished_tubes = []
             cur_tubes = []
 
-            for i_f in xrange(nframes - K + 1):
+            for i_f in xrange(nframes):
                frame = i_f + 1
                # get tubelets and NMS
                tubelets = vdets[c][i_f] # get K boxes and score
@@ -271,12 +302,18 @@ class tube_builder():
             pickle.dump(res, f)
 
 if __name__ == '__main__':
-   #dset = 'ucf101_rgb_valall'
-   dset = 'ucf101_rgb_trainall'
+   K = 5
+   dset = 'ucf101_rgb_valall'
+   #dset = 'ucf101_rgb_trainall'
+   if K > 1:
+      dset += 'K%d' % K
    nclasses = 24
-   K = 1
-   tb = tube_builder('../../output/res101/%s/faster_rcnn_10/detections.pkl' % dset,
-                     '../../output/res101/%s/faster_rcnn_10/tubes' % dset,
-                     nclasses,
-                     K)
+   tb = tube_builder(
+                     '../../output/res101/%s/faster_rcnn_10/' % dset,
+                     #'../../output/res101/%s/faster_rcnn_10/detections.pkl' % dset,
+                     '/sequoia/data2/gcheron/UCF101/detection/mytracksK%d_FasterOut/' % K,
+                     #'../../output/res101/%s/faster_rcnn_10/tubes' % dset,
+                     nclasses, K,
+                     True)
+                     #False)
    tb.build_tubes()
