@@ -5,7 +5,7 @@
 # --------------------------------------------------------
 # command:
 # ipython test_net.py -- --dataset ucf101 --testset trainall --net res101 --cuda --feat rgb --checkepoch 2 --checkpoint 680671
-# ipython test_net.py -- --dataset ucf101 --testset trainall --net res101 --cuda --feat rgb --checkepoch 1 --checkpoint 200000 --bs 5 --stack_input --set TEST.RPN_POST_NMS_TOP_N 200
+# ipython test_net.py -- --dataset ucf101 --testset trainall --net res101 --cuda --feat rgb --checkepoch 1 --checkpoint 200000 --bs 5 --stack_input --vid_from_to -1 -1 --set TEST.RPN_POST_NMS_TOP_N 200
 
 from __future__ import absolute_import
 from __future__ import division
@@ -102,6 +102,10 @@ def parse_args():
   parser.add_argument('--stack_inputs', dest='stack_inputs',
                       help='stack the <bs> inputs for prediction',
                       action='store_true')
+  parser.add_argument('--vid_from_to', dest='vid_from_to',
+                     type=int, nargs=2,
+                     help='tupple of video indices to test, -1 if no bound (only in stack mode)',
+                     default=[-1, -1])
 
   args = parser.parse_args()
   return args
@@ -151,7 +155,6 @@ if __name__ == '__main__':
   if args.stack_inputs:
     K = args.batch_size
     args.imdbval_name += '_K%d' % K
-
 
   if args.cfg_file is not None:
     cfg_from_file(args.cfg_file)
@@ -238,6 +241,22 @@ if __name__ == '__main__':
   if args.stack_inputs:
    num_images = len(imdb._all_stack_index)
 
+   i_from = 0
+   i_to = num_images - 1
+   first_frame = 0
+   last_frame = imdb._all_stack_index[-1] + K - 1
+   a1 = args.vid_from_to[0]
+   a2 = args.vid_from_to[1]
+   if a1 >= 0:
+    i_from = imdb._vid_stack_index[a1]
+    first_frame = imdb._vid_index[a1]
+   if a2 >= 0 and a2 < len(imdb._vid_stack_index) - 1:
+    # go until the next video start idx - 1
+    i_to = imdb._vid_stack_index[a2+1] - 1
+    last_frame = imdb._vid_index[a2+1] - 1
+
+   num_images = i_to - i_from + 1
+
    # define the stack sample
    class sampler(Sampler):
      def __init__(self, data_size, batch_size, imdb):
@@ -254,6 +273,13 @@ if __name__ == '__main__':
        # in order to point at the begining of the stacks
        _num = torch.LongTensor(self.stack_index).view(-1, 1)
        self._num = _num.expand(self.num_batch, self.batch_size) + self.range
+
+       # select the stacks we want to test
+       self._num = self._num[i_from:i_to+1, :]
+       assert self._num[0, 0] == first_frame, 'suppose to point to the fist frame'
+       assert self._num[-1, -1] == last_frame, 'suppose to point to the last frame'
+       assert self._num.shape == (num_images, K)
+
        self._num_view = self._num.view(-1)
 
        return iter(self._num_view)

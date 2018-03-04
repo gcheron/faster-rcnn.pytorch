@@ -72,7 +72,9 @@ class stackedimdb(imdb):
       self._stack_index = [] # these indices point to the begining of each stack
       if self.on_all_samples:
          self._all_stack_index = []
+      self._vid_stack_index = [] # these indices point to the first stack of each video
 
+    self._vid_index = [] # these indices point to the first image of each video
 
     image_idx = self._image_index
     image_path = self._image_path
@@ -89,6 +91,11 @@ class stackedimdb(imdb):
       if iii > 5 and DEBUG:
          break
       iii += 1
+      if K > 1:
+         # a new video starts at this stack index
+         self._vid_stack_index.append(len(self._all_stack_index))
+      self._vid_index.append(idx)
+
       vid_gt = gtfile[vid]
       if 'WH_size' in vid_gt:
         width = vid_gt['WH_size'][0]
