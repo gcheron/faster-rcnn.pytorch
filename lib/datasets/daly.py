@@ -46,7 +46,7 @@ class daly(stackedimdb):
                      'FoldingTextile', 'Ironing', 'Phoning', 'PlayingHarmonica', 'TakingPhotosOrVideos')
 
 
-
+    self.shotpath = '/sequoia/data2/gcheron/DALY/daly_shotdet/mat_shots/'
 
     if image_set == 'train' or image_set == 'trainall':
       vidlistpath = datasetroot + '/OF_vidlist_train1.txt'
@@ -54,3 +54,17 @@ class daly(stackedimdb):
       vidlistpath = datasetroot + '/OF_vidlist_test1.txt'
 
     stackedimdb.__init__(self, dfilename, vidlistpath, image_set)
+
+  def getShots(self):
+      self.vid_shot_ends = {}
+      gtfile = self.loadgtfile()
+      for vid in self.vidlist:
+         shots = sio.loadmat(self.shotpath + vid + '.mp4.mat')['shots']
+         _cmp =  gtfile[vid]['length']
+         assert shots[0, 0] == 1
+         if not shots[-1, -1] == _cmp:
+            print('%s: clamp last frame %d --> %d' % (vid, shots[-1, -1], _cmp))
+            shots[-1, -1] = _cmp
+
+         assert shots.shape[1] == 2 and shots.ndim == 2
+         self.vid_shot_ends[vid] = [ int(shots[i, 1]) for i in range(len(shots)) ]

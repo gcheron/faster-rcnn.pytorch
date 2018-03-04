@@ -6,6 +6,7 @@
 # command:
 # ipython test_net.py -- --dataset ucf101 --testset trainall --net res101 --cuda --feat rgb --checkepoch 2 --checkpoint 680671
 # ipython test_net.py -- --dataset ucf101 --testset trainall --net res101 --cuda --feat rgb --checkepoch 1 --checkpoint 200000 --bs 5 --stack_input --vid_from_to -1 -1 --set TEST.RPN_POST_NMS_TOP_N 200
+# ipython test_net.py -- --dataset daly  --testset trainall --net res101 --cuda --feat rgb --checkepoch 8 --checkpoint 3142 --bs 5 --stack_input --vid_from_to -1 -1 --set TEST.RPN_POST_NMS_TOP_N 200
 
 from __future__ import absolute_import
 from __future__ import division
@@ -148,6 +149,10 @@ if __name__ == '__main__':
   elif args.dataset == "ucf101":
       args.imdbval_name = "ucf101_" + args.testset + "_" + args.feature
       args.set_cfgs += ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
+  elif args.dataset == "daly":
+      args.imdbval_name = "daly_" + args.testset + "_" + args.feature
+      args.set_cfgs += ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
+
 
   args.cfg_file = "cfgs/{}_ls.yml".format(args.net) if args.large_scale else "cfgs/{}.yml".format(args.net)
 
