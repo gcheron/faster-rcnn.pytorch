@@ -7,7 +7,7 @@ import os
 import glob
 
 class tube_builder():
-   def __init__(self, detpath, resdir, nclasses, K, per_video_dets=True):
+   def __init__(self, detpath, resdir, nclasses, K, per_video_dets=True, hasShots=True):
       self.resdir = resdir
       self.nclasses = nclasses
       self.K = K
@@ -18,6 +18,7 @@ class tube_builder():
       self.min_tube_score = 0.01 # min score to keep the final tube
       self.min_tube_length = 15 # min length to keep the final tube
       self.per_video_dets = per_video_dets # we have one detection file per video
+      self.hasShots = hasShots
 
       if self.per_video_dets:
          self.detdir = detpath
@@ -28,6 +29,8 @@ class tube_builder():
          with open(self.detfile) as f:
             self.detections = pickle.load(f)
          assert len(self.detections) == self.nclasses + 2 # bkg + detpath
+      if self.hasShots:
+         assert self.per_video_dets, 'please provide per video detections when several shots'
 
       if not os.path.exists(resdir):
          os.makedirs(resdir)
@@ -171,6 +174,45 @@ class tube_builder():
             with open(video_dets[vid][0]) as f:
                vdets = pickle.load(f)
             assert len(vdets[0]) == self.nclasses + 2 # bkg + detpath
+
+            if self.hasShots:
+               # grab image paths to get shots
+               paths = [ vdets[f][-1] for f in range(len(vdets)) ]
+               vid_shots = []
+               for i_f_det, _impath in enumerate(paths):
+                  fn = int(re.match('.*/[^/]*/image-([0-9]*)\.*',_impath[0]).group(1))
+                  if i_f_det == 0:
+                     f_start = fn
+                  elif fn != prev_im + 1:
+                     assert fn > prev_im
+                     # this shot ends at index (i_f_det - 1) and f_start (prev_im) is
+                     # the first frame of its first (last) stack
+                     vid_shots.append( (i_f_det - 1, f_start, prev_im) )
+                     f_start = fn # the new shot starts here
+
+                  prev_im = fn
+
+               vid_shots.append( (i_f_det, f_start, prev_im) ) # get last shot
+
+               # check shots
+               prev_end = -K + 1
+               p_i_end = -1
+               for i_shot, cshot in enumerate(vid_shots):
+                  i_f_detend, f_start, f_end = cshot
+                  numdets = f_end - f_start + 1 # number of detections in this shot
+                  numsince = i_f_detend - p_i_end # number of detections since the previous shot
+                  assert numdets == numsince
+                  if f_start != prev_end + K:
+                     # one shot has been skipped
+                     skip_start = prev_end + K
+                     skip_end = f_start - 1
+                     slen = skip_end - skip_start + 1
+                     print '%s: shot from frame %d --> %d (length %d) has been skipped' % (
+                     vid, skip_start, skip_end, slen)
+                     assert slen < K, 'skipped shot length must be 0 < (%d) < K' % slen
+                  prev_end = f_end
+                  p_i_end = i_f_detend
+
             # reorder: nclass x dets
             _tmp = []
             for c in xrange(self.nclasses):
@@ -181,7 +223,7 @@ class tube_builder():
             vdets = video_dets[vid]
 
          outfile = '%s/%s.pkl' % (self.resdir, vid)
-         nframes = len(vdets[0]) 
+         n_stack_dets = len(vdets[0])
 
          if i_v % 50 == 0:
             print '%d/%d: save %s' % (i_v + 1, len(video_dets), outfile)
@@ -191,17 +233,47 @@ class tube_builder():
             finished_tubes = []
             cur_tubes = []
 
-            for i_f in xrange(nframes):
-               frame = i_f + 1
+            i_shot = -1
+            last_of_shot = True
+            for i_d in xrange(n_stack_dets):
+               if self.hasShots:
+                  if last_of_shot:
+                     i_shot += 1 # the previous shot ended
+
+                  # get shot info
+                  i_last_detshot, fshot_start, fshot_end = vid_shots[i_shot]
+
+                  # the previous shot ended
+                  if last_of_shot: # we start a new shot
+                     frame = fshot_start
+                     last_of_shot = False
+                     init_tubes = True
+                  else:
+                     frame += 1
+                     init_tubes = False
+
+                  # check if this shot ends
+                  if i_d == i_last_detshot: # this is the last detection of the shot
+                     last_of_shot = True
+
+               else:
+                  frame = i_d + 1
                # get tubelets and NMS
-               tubelets = vdets[c][i_f] # get K boxes and score
+               tubelets = vdets[c][i_d] # get K boxes and score
                idx = self.nms_tubelets(tubelets)
                tubelets = tubelets[idx, :]
 
-               if i_f == 0:
-                  # start tubes and continue
-                  for i in xrange(tubelets.shape[0]):
-                     cur_tubes.append( [(1, tubelets[i, :])] )
+               if i_d == 0 or (self.hasShots and init_tubes):
+                  assert len(cur_tubes) == 0
+                  if self.hasShots and last_of_shot:
+                     # this is a small shot composed of one stack only, skip it
+                     assert fshot_end - fshot_start + 1 == K
+                     print '%s: skip one-stack shot of frame %d --> %d' % (vid, fshot_start, fshot_end)
+                  else:
+                     # start tubes
+                     for i in xrange(tubelets.shape[0]):
+                        cur_tubes.append( [(frame, tubelets[i, :])] )
+
                   continue
 
                # sort tube according to scores
@@ -245,14 +317,19 @@ class tube_builder():
                      if offset >= self.offset_end:
                         finished.append(i_t) 
 
-               # finish tubes
-               for i_t in finished[::-1]:
-                  finished_tubes.append(cur_tubes[i_t][:])
-                  del cur_tubes[i_t]
+               if self.hasShots and last_of_shot:
+                  # finish all tubes
+                  finished_tubes += cur_tubes
+                  cur_tubes = []
+               else:
+                  # finish tubes
+                  for i_t in finished[::-1]:
+                     finished_tubes.append(cur_tubes[i_t][:])
+                     del cur_tubes[i_t]
 
-               # start new tubes from remaing tubelets
-               for i in xrange(tubelets.shape[0]):
-                  cur_tubes.append( [(frame, tubelets[i, :])] )
+                  # start new tubes from remaing tubelets
+                  for i in xrange(tubelets.shape[0]):
+                     cur_tubes.append( [(frame, tubelets[i, :])] )
 
             # add last current tubes to finished ones
             finished_tubes += cur_tubes
@@ -303,17 +380,26 @@ class tube_builder():
 
 if __name__ == '__main__':
    K = 5
-   dset = 'ucf101_rgb_valall'
-   #dset = 'ucf101_rgb_trainall'
+   dset = 'rgb_trainall' # 'rgb_valall' 'rgb_trainall'
+   dataname = 'UCF101' # 'DALY' 'UCF101'
+
+   if dataname == 'DALY':
+      proot = '/sequoia/data2/gcheron/DALY'
+      pref = 'daly'
+      nclasses = 10
+      hasShots = True # there are several shots in a video
+   elif dataname == 'UCF101':
+      proot = '/sequoia/data2/gcheron/UCF101/detection'
+      pref = 'ucf101'
+      nclasses = 24
+      hasShots = False
+
+   dset = '%s_%s' % (pref, dset)
    if K > 1:
       dset += 'K%d' % K
-   nclasses = 24
    tb = tube_builder(
                      '../../output/res101/%s/faster_rcnn_10/' % dset,
-                     #'../../output/res101/%s/faster_rcnn_10/detections.pkl' % dset,
-                     '/sequoia/data2/gcheron/UCF101/detection/mytracksK%d_FasterOut/' % K,
-                     #'../../output/res101/%s/faster_rcnn_10/tubes' % dset,
+                     '%s/mytracksK%d_FasterOut/' % (proot, K),
                      nclasses, K,
-                     True)
-                     #False)
+                     True, hasShots)
    tb.build_tubes()
