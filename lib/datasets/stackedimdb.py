@@ -69,12 +69,12 @@ class stackedimdb(imdb):
 
     K = self.K
     if K > 1:
-      self._stack_index = [] # these indices point to the begining of each stack
+      self._stack_index = [] # point to the begining of each stack (its first idx in _image_index)
       if self.on_all_samples:
-         self._all_stack_index = []
-      self._vid_stack_index = [] # these indices point to the first stack of each video
+         self._all_stack_index = [] # same as _stack_index but contains all test stack and not just GT
+      self._vid_stack_index = [] # these indices point to the first stack idx of each video
 
-    self._vid_index = [] # these indices point to the first image of each video
+    self._vid_index = [] # point to the first image idx of each video
 
     image_idx = self._image_index
     image_path = self._image_path

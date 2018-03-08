@@ -26,6 +26,7 @@ def prepare_roidb(imdb):
          for i in range(imdb.num_images)]
          
   for i in range(len(imdb.image_index)):
+    if i % 50000 == 0: print('im prep: %d/%d' % (i, len(imdb.image_index)))
     roidb[i]['img_id'] = imdb.image_id_at(i)
     roidb[i]['image'] = imdb.image_path_at(i)
     #if not (imdb.name.startswith('coco')):

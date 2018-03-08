@@ -6,6 +6,7 @@
 # command:
 # ipython test_net.py -- --dataset ucf101 --testset trainall --net res101 --cuda --feat rgb --checkepoch 2 --checkpoint 680671
 # ipython test_net.py -- --dataset ucf101 --testset trainall --net res101 --cuda --feat rgb --checkepoch 1 --checkpoint 200000 --bs 5 --stack_input --vid_from_to -1 -1 --set TEST.RPN_POST_NMS_TOP_N 200
+# ipython test_net.py -- --dataset ucf101 --testset trainall --net res101 --cuda --feat rgb --checkepoch 2 --checkpoint 269675 --bs 5 --stack_input --vid_from_to -1 -1 --set TEST.RPN_POST_NMS_TOP_N 200
 # ipython test_net.py -- --dataset daly  --testset trainall --net res101 --cuda --feat rgb --checkepoch 8 --checkpoint 3142 --bs 5 --stack_input --vid_from_to -1 -1 --set TEST.RPN_POST_NMS_TOP_N 200
 
 from __future__ import absolute_import
@@ -248,17 +249,39 @@ if __name__ == '__main__':
 
    i_from = 0
    i_to = num_images - 1
-   first_frame = 0
-   last_frame = imdb._all_stack_index[-1] + K - 1
+   first_frameidx = imdb._image_index[0]
+   last_frameidx = imdb._image_index[imdb._all_stack_index[-1] + K - 1]
    a1 = args.vid_from_to[0]
    a2 = args.vid_from_to[1]
+   i_vid_first = 0
+   i_vid_last = len(imdb._vid_stack_index) - 1
+
    if a1 >= 0:
     i_from = imdb._vid_stack_index[a1]
-    first_frame = imdb._vid_index[a1]
+    first_frameidx = imdb._image_index[imdb._vid_index[a1]]
+    i_vid_first = a1
    if a2 >= 0 and a2 < len(imdb._vid_stack_index) - 1:
     # go until the next video start idx - 1
     i_to = imdb._vid_stack_index[a2+1] - 1
-    last_frame = imdb._vid_index[a2+1] - 1
+    last_frameidx = imdb._image_index[imdb._vid_index[a2+1] - 1]
+    i_vid_last = a2
+
+   # compute first and last frame offsets (to skip non valid stack)
+   shots = imdb.vid_shot_ends[imdb.vidlist[i_vid_first]]
+   shot_lens = np.array(shots) - np.array([0] + shots[:-1])
+   for L in shot_lens:
+      if L >= K:
+         break # this is a valid stack
+      else:
+         first_frameidx += L # frame will correspond to a valid stack (skip others)
+   # do the same but reversed for last frame
+   shots = imdb.vid_shot_ends[imdb.vidlist[i_vid_last]]
+   shot_lens = np.array(shots) - np.array([0] + shots[:-1])
+   for L in shot_lens[::-1]:
+      if L >= K:
+         break
+      else:
+         first_frameidx -= L
 
    num_images = i_to - i_from + 1
 
@@ -281,8 +304,8 @@ if __name__ == '__main__':
 
        # select the stacks we want to test
        self._num = self._num[i_from:i_to+1, :]
-       assert self._num[0, 0] == first_frame, 'suppose to point to the fist frame'
-       assert self._num[-1, -1] == last_frame, 'suppose to point to the last frame'
+       assert imdb._image_index[self._num[0, 0]] == first_frame, 'suppose to point to the fist frame'
+       assert imdb._image_index[self._num[-1, -1]] == last_frameidx, 'suppose to point to the last frame'
        assert self._num.shape == (num_images, K)
 
        self._num_view = self._num.view(-1)
@@ -429,12 +452,14 @@ if __name__ == '__main__':
       vid_boxes[-1] = impath
       if PER_VIDEO_SAVING:
          vidname = re.match('.*/([^/]*)/[^/]*.jpg', impath[0]).group(1)
-         if i > 0 and previous_vid != vidname:
-            # we reached a new video
-            assert not os.path.exists(det_file_vid),'outfile %s already exists!' % (det_file_vid)
-            with open(det_file_vid, 'wb') as f:
-               pickle.dump(previous_boxes, f, pickle.HIGHEST_PROTOCOL)
-            previous_boxes = []
+         if previous_vid != vidname:
+            print('\n' + vidname)
+            if i > 0:
+               # we reached a new video
+               assert not os.path.exists(det_file_vid),'outfile %s already exists!' % (det_file_vid)
+               with open(det_file_vid, 'wb') as f:
+                  pickle.dump(previous_boxes, f, pickle.HIGHEST_PROTOCOL)
+               previous_boxes = []
 
          # append boxes of the current video
          previous_boxes.append(vid_boxes)
